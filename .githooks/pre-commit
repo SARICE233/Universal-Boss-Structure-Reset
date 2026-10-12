@@ -1,0 +1,8 @@
+#!/bin/sh
+# Refuse a commit that would publish private material.
+# Enable once per clone:  git config core.hooksPath .githooks
+python tools/check_privacy.py --staged || {
+    echo ""
+    echo "pre-commit: 提交被拒绝（见上）。如确认无误：git commit --no-verify"
+    exit 1
+}
