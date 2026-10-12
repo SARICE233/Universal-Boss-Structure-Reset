@@ -1,0 +1,12 @@
+# Keep every text file LF in the repository, whatever the checkout platform is.
+* text=auto eol=lf
+
+# Files that must never be line ending converted.
+*.jar   binary
+*.png   binary
+*.zip   binary
+*.gz    binary
+*.dat   binary
+
+# Generated or downloaded content that must not show up as a diff.
+gradle/wrapper/gradle-wrapper.jar binary

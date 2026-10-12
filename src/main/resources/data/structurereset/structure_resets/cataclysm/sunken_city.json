@@ -1,0 +1,30 @@
+{
+  "structure": "cataclysm:sunken_city",
+  "radius": 160,
+  "trigger": "either",
+  "anchor_blocks": [
+    "cataclysm:boss_respawner"
+  ],
+  "mode": "global",
+  "cooldown_seconds": 60,
+  "consume_item": true,
+  "required_item": "structurereset:structure_reset_core",
+  "priority": 0,
+  "actions": [
+    {
+      "type": "structurereset:respawn_boss",
+      "params": {
+        "entity": "cataclysm:the_leviathan",
+        "count": 1
+      }
+    },
+    {
+      "type": "structurereset:refill_loot",
+      "params": {
+        "mode": "empty_only",
+        "reroll_seed": true
+      }
+    }
+  ],
+  "_note": "structure id verified in .../cataclysm/worldgen/structure/sunken_city.json (type cataclysm:sunken_city). CHOICE: the_leviathan, not scylla. Evidence: sunken_city*.nbt places cataclysm:altar_of_abyss (2 occurrences) and AltarOfAbyss_Block_Entity.java:72 does ModEntities.THE_LEVIATHAN.get().create(level); The_Leviathan_Entity.java declares a CMBossInfoServer boss bar and ModEntities.java:215 registers \"the_leviathan\". Scylla was rejected because its only structure-level spawn evidence is in the Acropolis (worldgen/template_pool/acropolis/mob/scylla.json -> location cataclysm:scylla, referenced by acropolis_*.nbt), and no sunken_city template or pool references cataclysm:scylla. High confidence for the_leviathan."
+}

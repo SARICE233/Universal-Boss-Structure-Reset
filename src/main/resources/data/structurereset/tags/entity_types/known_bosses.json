@@ -1,0 +1,21 @@
+{
+    "_comment": [
+        "Bosses this addon treats as bosses without measuring their health.",
+        "The list is interoperability data - the entity ids are facts about other",
+        "mods, needed so a pack can be recognised - and this file is arranged and",
+        "written by this project. It is deliberately not a copy of any other mod's",
+        "tag file, and it is read through this addon's own tag:",
+        "structurereset:known_bosses",
+        "It is optional: entries can be added or removed freely."
+    ],
+    "values": [
+        "cataclysm:ancient_remnant",
+        "cataclysm:ender_guardian",
+        "cataclysm:ignis",
+        "cataclysm:maledictus",
+        "cataclysm:netherite_monstrosity",
+        "cataclysm:scylla",
+        "cataclysm:the_harbinger",
+        "cataclysm:the_leviathan"
+    ]
+}

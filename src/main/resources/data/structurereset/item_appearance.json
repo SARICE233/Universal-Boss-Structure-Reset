@@ -1,0 +1,5 @@
+{
+  "schema": 1,
+  "description": "Maps an item id to the item id whose baked inventory model is drawn in its place. The target must be a registered item, because the model is borrowed from that item's own baked entry - a plain model file path (namespace:item/foo) is never accepted. The map is empty by default and therefore changes nothing. To re-skin the core, either replace assets/structurereset/textures/item/structure_reset_core.png (and its .mcmeta) in a resource pack, or add a custom_model_data override to assets/structurereset/models/item/structure_reset_core.json.",
+  "items": {}
+}

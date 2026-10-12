@@ -1,0 +1,30 @@
+{
+  "structure": "cataclysm:frosted_prison",
+  "radius": 128,
+  "trigger": "either",
+  "anchor_blocks": [
+    "cataclysm:boss_respawner"
+  ],
+  "mode": "global",
+  "cooldown_seconds": 60,
+  "consume_item": true,
+  "required_item": "structurereset:structure_reset_core",
+  "priority": 0,
+  "actions": [
+    {
+      "type": "structurereset:respawn_boss",
+      "params": {
+        "entity": "cataclysm:maledictus",
+        "count": 1
+      }
+    },
+    {
+      "type": "structurereset:refill_loot",
+      "params": {
+        "mode": "empty_only",
+        "reroll_seed": true
+      }
+    }
+  ],
+  "_note": "CONFIRMED mapping. structure id verified in .../cataclysm/worldgen/structure/frosted_prison.json (type cataclysm:cataclysm_jigsaw, size 25, start_pool cataclysm:frosted_prison/start_pool). frosted_prison*.nbt places cataclysm:cursed_tombstone (2 occurrences), and Cursed_tombstone_Entity.java:80 does ModEntities.MALEDICTUS.get().create(level); Maledictus_Entity.java declares a CMBossInfoServer boss bar. ModEntities.java:594 registers \"maledictus\". High confidence."
+}

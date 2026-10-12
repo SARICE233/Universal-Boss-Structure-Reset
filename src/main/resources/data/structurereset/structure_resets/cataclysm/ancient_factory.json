@@ -1,0 +1,30 @@
+{
+  "structure": "cataclysm:ancient_factory",
+  "radius": 96,
+  "trigger": "either",
+  "anchor_blocks": [
+    "cataclysm:boss_respawner"
+  ],
+  "mode": "global",
+  "cooldown_seconds": 60,
+  "consume_item": true,
+  "required_item": "structurereset:structure_reset_core",
+  "priority": 0,
+  "actions": [
+    {
+      "type": "structurereset:respawn_boss",
+      "params": {
+        "entity": "cataclysm:the_harbinger",
+        "count": 1
+      }
+    },
+    {
+      "type": "structurereset:refill_loot",
+      "params": {
+        "mode": "empty_only",
+        "reroll_seed": true
+      }
+    }
+  ],
+  "_note": "CONFIRMED mapping. Boss taken from the structure's own mob pool in the read-only Cataclysm source (worldgen/template_pool/<structure>/mob/), cross-checked against the mob piece .nbt and the entity's boss bar (CMBossInfoServer). Previous value was wrong."
+}

@@ -1,0 +1,31 @@
+{
+  "structure": "#minecraft:village",
+  "radius": 64,
+  "trigger": "in_structure",
+  "anchor_blocks": [
+    "minecraft:bell"
+  ],
+  "mode": "per_player",
+  "cooldown_seconds": 900,
+  "consume_item": false,
+  "priority": -1,
+  "actions": [
+    {
+      "type": "structurereset:clear_entities",
+      "params": {
+        "entities": [
+          "minecraft:zombie",
+          "minecraft:zombie_villager"
+        ],
+        "include_items": false
+      }
+    },
+    {
+      "type": "structurereset:message",
+      "params": {
+        "text": "A village near ${x} ${y} ${z} was cleansed for ${player}.",
+        "target": "server"
+      }
+    }
+  ]
+}

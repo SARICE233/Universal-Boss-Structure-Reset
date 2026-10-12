@@ -1,0 +1,30 @@
+{
+  "structure": "cataclysm:cursed_pyramid",
+  "radius": 112,
+  "trigger": "either",
+  "anchor_blocks": [
+    "cataclysm:boss_respawner"
+  ],
+  "mode": "global",
+  "cooldown_seconds": 60,
+  "consume_item": true,
+  "required_item": "structurereset:structure_reset_core",
+  "priority": 0,
+  "actions": [
+    {
+      "type": "structurereset:respawn_boss",
+      "params": {
+        "entity": "cataclysm:ancient_remnant",
+        "count": 1
+      }
+    },
+    {
+      "type": "structurereset:refill_loot",
+      "params": {
+        "mode": "empty_only",
+        "reroll_seed": true
+      }
+    }
+  ],
+  "_note": "CONFIRMED mapping. structure id verified in .../cataclysm/worldgen/structure/cursed_pyramid.json (type cataclysm:cursed_pyramid). Cursed_Pyramid_Structure.java:228 does ModEntities.ANCIENT_REMNANT.get().create(worldIn.getLevel()) and Ancient_Remnant_Entity.java:1550 sets a respawner entity id; the class declares a CMBossInfoServer boss bar. ModEntities.java:536 registers \"ancient_remnant\". High confidence."
+}

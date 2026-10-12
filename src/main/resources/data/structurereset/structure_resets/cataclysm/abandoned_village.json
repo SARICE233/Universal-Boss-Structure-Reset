@@ -1,0 +1,21 @@
+{
+  "structure": "cataclysm:abandoned_village",
+  "radius": 64,
+  "trigger": "in_structure",
+  "anchor_blocks": [],
+  "mode": "global",
+  "cooldown_seconds": 60,
+  "consume_item": true,
+  "required_item": "structurereset:structure_reset_core",
+  "priority": 0,
+  "actions": [
+    {
+      "type": "structurereset:refill_loot",
+      "params": {
+        "mode": "empty_only",
+        "reroll_seed": true
+      }
+    }
+  ],
+  "_note": "NO BOSS STRUCTURE: 附属小结构（abandoned 系列），无 Boss. This definition therefore only refills loot; it deliberately has no respawn_boss action and no anchor block, so it can never summon a boss."
+}

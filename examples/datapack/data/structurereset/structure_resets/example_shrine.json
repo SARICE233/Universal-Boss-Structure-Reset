@@ -1,0 +1,34 @@
+{
+  "structure": "minecraft:woodland_mansion",
+  "radius": 48,
+  "trigger": "in_structure",
+  "anchor_blocks": [],
+  "mode": "global",
+  "cooldown_seconds": 1800,
+  "consume_item": false,
+  "priority": 0,
+  "actions": [
+    {
+      "type": "structurereset:respawn_boss",
+      "params": {
+        "entity": "minecraft:evoker",
+        "count": 1,
+        "spread": 3.0
+      }
+    },
+    {
+      "type": "structurereset:refill_loot",
+      "params": {
+        "mode": "empty_only",
+        "reroll_seed": true
+      }
+    },
+    {
+      "type": "structurereset:message",
+      "params": {
+        "text": "The shrine of ${definition} stirs again in ${dimension}.",
+        "target": "actor"
+      }
+    }
+  ]
+}

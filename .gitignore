@@ -1,0 +1,63 @@
+# ---- Gradle / 构建产物 ----
+.gradle/
+build/
+out/
+!gradle/wrapper/gradle-wrapper.jar
+
+# ---- IDE / 编辑器 ----
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.settings/
+.classpath
+.project
+bin/
+*.launch
+.run/
+
+# ---- 开发用运行目录 ----
+run/
+runs/
+run-data/
+logs/
+
+# ---- 崩溃报告 / JVM 转储 ----
+crash-reports/
+crash-*.txt
+hs_err_pid*.log
+replay_pid*.log
+*.hprof
+错误报告-*.zip
+
+# ---- 离线工具链的 Python 缓存 ----
+__pycache__/
+*.py[cod]
+
+# ---- 工具下载的临时 jar（可复现获取） ----
+tools/lib/
+*.part
+
+# ---- 本地审计报告：含本机绝对路径与测试实例名，绝不入库 ----
+reports/
+
+# ---- 隐私：绝不入库（本地保留） ----
+screenshots/
+screenshot/
+/*.png
+*.log
+*.zip
+*.rar
+*.7z
+*.mp4
+*.dat
+
+# ---- 操作系统 ----
+Thumbs.db
+.DS_Store
+Desktop.ini
+
+# 私人聊天截图：绝不入库（本地保留，仅供本人查看）
+chat-img-src/
+

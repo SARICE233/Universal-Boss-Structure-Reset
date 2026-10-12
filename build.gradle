@@ -1,0 +1,94 @@
+plugins {
+    id 'java'
+    id 'net.minecraftforge.gradle' version '[6.0,6.2)'
+}
+
+version = mod_version
+group = mod_group_id
+
+base {
+    archivesName = mod_id
+}
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(17)
+
+// Every source file of this project is UTF-8. Without an explicit encoding a
+// Windows default code page would silently turn non-ASCII string literals into
+// mojibake at runtime, so pin the compiler and the test JVM to UTF-8.
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+println('Java: ' + System.getProperty('java.version') + ' JVM: ' + System.getProperty('java.vm.version') + '(' + System.getProperty('java.vendor') + ') Arch: ' + System.getProperty('os.arch'))
+
+minecraft {
+    // The mappings can be changed at any time and must be in the following format.
+    mappings channel: 'official', version: '1.20.1'
+
+    runs {
+        client {
+            workingDirectory project.file('run')
+            property 'forge.logging.markers', 'REGISTRIES'
+            property 'forge.logging.console.level', 'debug'
+            mods {
+                structurereset {
+                    source sourceSets.main
+                }
+            }
+        }
+
+        server {
+            workingDirectory project.file('run')
+            property 'forge.logging.markers', 'REGISTRIES'
+            property 'forge.logging.console.level', 'debug'
+            mods {
+                structurereset {
+                    source sourceSets.main
+                }
+            }
+        }
+    }
+}
+
+repositories {
+    maven { url = 'https://maven.minecraftforge.net/' }
+    // KubeJS pulls architectury-forge in transitively; it is not on any of the
+    // other repositories, so compiling against the KubeJS API needs this one.
+    maven { url = 'https://maven.architectury.dev/' }
+    maven { url = 'https://maven.latvian.dev/releases' }
+    mavenCentral()
+}
+
+dependencies {
+    minecraft "net.minecraftforge:forge:${minecraft_version}-${forge_version}"
+
+    // Optional, compile-time only bridge: KubeJS is never required at runtime.
+    compileOnly "dev.latvian.mods:kubejs-forge:${kubejs_version}"
+
+    // JUnit 5.10.2 pairs with the JUnit Platform 1.10.2; the launcher version is
+    // pinned so it resolves even when no platform/BOM aligns it for us.
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.10.2'
+}
+
+tasks.named('test', Test).configure {
+    useJUnitPlatform()
+    jvmArgs '-Dfile.encoding=UTF-8'
+}
+
+jar {
+    manifest {
+        attributes([
+                'Specification-Title'     : mod_id,
+                'Specification-Vendor'    : mod_group_id,
+                'Specification-Version'   : '1',
+                'Implementation-Title'    : project.name,
+                'Implementation-Version'  : project.version,
+                'Implementation-Vendor'   : mod_group_id,
+                'Implementation-Timestamp': new Date().format("yyyy-MM-dd'T'HH:mm:ssZ")
+        ])
+    }
+}
+
+// Reobfuscate the produced jar into the production (SRG) namespace.
+jar.finalizedBy('reobfJar')

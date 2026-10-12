@@ -1,0 +1,30 @@
+{
+  "structure": "cataclysm:acropolis",
+  "radius": 128,
+  "trigger": "either",
+  "anchor_blocks": [
+    "cataclysm:boss_respawner"
+  ],
+  "mode": "global",
+  "cooldown_seconds": 60,
+  "consume_item": true,
+  "required_item": "structurereset:structure_reset_core",
+  "priority": 0,
+  "actions": [
+    {
+      "type": "structurereset:respawn_boss",
+      "params": {
+        "entity": "cataclysm:scylla",
+        "count": 1
+      }
+    },
+    {
+      "type": "structurereset:refill_loot",
+      "params": {
+        "mode": "empty_only",
+        "reroll_seed": true
+      }
+    }
+  ],
+  "_note": "structure id verified in .../cataclysm/worldgen/structure/acropolis.json (type cataclysm:cataclysm_jigsaw, size 33, start_pool cataclysm:acropolis/start_pool, start_height absolute 200). Direct evidence: worldgen/template_pool/acropolis/mob/scylla.json is the pool 'cataclysm:acropolis/mob/scylla' whose element location is 'cataclysm:scylla', and acropolis_*.nbt reference cataclysm:acropolis/mob/scylla. Scylla_Entity.java declares a CMBossInfoServer boss bar and Scylla_Entity.java:834 sets a respawner entity id, so scylla is a genuine boss. High confidence."
+}

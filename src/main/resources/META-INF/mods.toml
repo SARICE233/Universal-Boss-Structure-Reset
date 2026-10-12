@@ -1,0 +1,30 @@
+modLoader="javafml"
+loaderVersion="[47,)"
+license="MIT"
+
+[[mods]]
+modId="structurereset"
+version="${file.jarVersion}"
+displayName="Universal-Boss-Structure-Reset Mod"
+description='''
+A standalone addon for Forge 1.20.1 that resets one-shot boss structures
+(such as the ones shipped by Cataclysm): the boss respawns and the loot is
+refilled. Everything (item texture, recipes, structures and reset actions)
+is data driven and can be customised by modpack authors.
+'''
+authors="SARICE233"
+displayURL="https://github.com/SARICE233/Universal-Boss-Structure-Reset"
+
+[[dependencies.structurereset]]
+modId="forge"
+mandatory=true
+versionRange="[47,)"
+ordering="NONE"
+side="BOTH"
+
+[[dependencies.structurereset]]
+modId="minecraft"
+mandatory=true
+versionRange="[1.20.1,1.21)"
+ordering="NONE"
+side="BOTH"

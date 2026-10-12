@@ -1,0 +1,46 @@
+{
+  "structure": "minecraft:stronghold",
+  "radius": 32,
+  "trigger": "anchor_block",
+  "anchor_blocks": [
+    "minecraft:lodestone"
+  ],
+  "mode": "global",
+  "cooldown_seconds": 600,
+  "consume_item": true,
+  "required_item": "structurereset:structure_reset_core",
+  "priority": 10,
+  "actions": [
+    {
+      "type": "structurereset:reset_blocks",
+      "params": {
+        "blocks": [
+          {
+            "pos": [
+              0,
+              1,
+              0
+            ],
+            "block": "minecraft:lodestone",
+            "keep_nbt": false
+          }
+        ]
+      }
+    },
+    {
+      "type": "structurereset:run_command",
+      "params": {
+        "command": "say ${definition} was reset at ${x} ${y} ${z} by ${player}",
+        "as": "server",
+        "permission_level": 2
+      }
+    },
+    {
+      "type": "structurereset:message",
+      "params": {
+        "text": "The anchor hums and the halls are restored.",
+        "target": "actor"
+      }
+    }
+  ]
+}

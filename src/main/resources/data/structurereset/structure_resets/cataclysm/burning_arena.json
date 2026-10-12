@@ -1,0 +1,30 @@
+{
+  "structure": "cataclysm:burning_arena",
+  "radius": 80,
+  "trigger": "either",
+  "anchor_blocks": [
+    "cataclysm:boss_respawner"
+  ],
+  "mode": "global",
+  "cooldown_seconds": 60,
+  "consume_item": true,
+  "required_item": "structurereset:structure_reset_core",
+  "priority": 0,
+  "actions": [
+    {
+      "type": "structurereset:respawn_boss",
+      "params": {
+        "entity": "cataclysm:ignis",
+        "count": 1
+      }
+    },
+    {
+      "type": "structurereset:refill_loot",
+      "params": {
+        "mode": "empty_only",
+        "reroll_seed": true
+      }
+    }
+  ],
+  "_note": "CONFIRMED mapping. structure id verified in .../cataclysm/worldgen/structure/burning_arena.json (type cataclysm:burning_arena). burning_arena*.nbt places cataclysm:altar_of_fire (2 occurrences), and AltarOfFire_Block_Entity.java:73 does ModEntities.IGNIS.get().create(level); Ignis_Entity.java declares a CMBossInfoServer boss bar. ModEntities.java:106 registers \"ignis\". High confidence."
+}

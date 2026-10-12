@@ -1,0 +1,26 @@
+{
+  "parent": "minecraft:item/generated",
+  "textures": {
+    "layer0": "structurereset:item/structure_reset_core"
+  },
+  "overrides": [
+    {
+      "predicate": {
+        "custom_model_data": 1
+      },
+      "model": "structurereset:item/structure_reset_core_skin1"
+    },
+    {
+      "predicate": {
+        "custom_model_data": 2
+      },
+      "model": "structurereset:item/structure_reset_core_skin2"
+    },
+    {
+      "predicate": {
+        "custom_model_data": 100
+      },
+      "model": "structurereset:item/structure_reset_core_active"
+    }
+  ]
+}
