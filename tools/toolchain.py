@@ -13,15 +13,28 @@ resolves the compiler and the runtime the same way:
 
 Windows paths are written with forward slashes on purpose: pathlib accepts them
 and this file then needs no escape sequences.  Nothing here downloads anything.
+
+It also owns the one scratch-directory helper every offline tool uses, because
+some sandboxes let a process write files under %TEMP% but refuse to create a
+directory there.  make_scratch_dir() tries the system temp directory first and
+falls back to <workspace>/build, so no tool has to call tempfile.mkdtemp()
+itself.  Set STRUCTURERESET_SCRATCH_ROOT (or pass root=) to replace the
+system-temp candidate: point it at a directory that cannot hold a new directory
+and the workspace fallback is exercised on a machine whose real %TEMP% is
+writable.  A rejected candidate is reported on stderr, so the fallback the run
+actually used is visible in its output.
 """
 
 from __future__ import annotations
 
+import atexit
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
+import uuid
 from pathlib import Path
 
 try:
@@ -153,3 +166,132 @@ def describe(jdk=None):
     label = str(jdk) if jdk is not None else "PATH fallback (no JDK 17 found)"
     return ("JDK 17 home: %s; javac: %s (%s)"
             % (label, javac(jdk), tool_version(javac(jdk))))
+
+
+# ------------------------------------------------------ private scratch dirs
+
+#: Root the fallback scratch directory hangs off: <WORKSPACE>/build/<prefix>-...
+WORKSPACE = Path(__file__).resolve().parent.parent
+
+#: Optional replacement for the system temp candidate.  Unset by default, so
+#: the normal order (system temp, then <workspace>/build) is unchanged.
+SCRATCH_ROOT_ENV = "STRUCTURERESET_SCRATCH_ROOT"
+
+#: Scratch directories this process created and has not removed yet.
+_SCRATCH_DIRS = []
+
+
+def _scratch_bases(workspace=None, root=None):
+    """Candidate parents of a scratch directory, most preferred first.
+
+    Without an override the system temp directory comes first -- that is where a
+    scratch directory belongs -- and <workspace>/build comes last, because some
+    sandboxes accept files under %TEMP% yet refuse to create a directory there.
+
+    An explicit override (the root argument, or STRUCTURERESET_SCRATCH_ROOT)
+    *replaces* the system temp candidate instead of being tried in front of it:
+    pointing it at a path that cannot hold a new directory makes the workspace
+    fallback happen on a machine whose real %TEMP% is perfectly writable, which
+    is how that fallback is exercised rather than assumed.
+    """
+    workspace = Path(workspace if workspace is not None else WORKSPACE)
+    bases = []
+    override = root if root else os.environ.get(SCRATCH_ROOT_ENV)
+    if override:
+        base = Path(override)
+        bases.append(base if base.is_absolute() else workspace / base)
+    else:
+        bases.append(Path(tempfile.gettempdir()))
+    bases.append(workspace / "build")
+    return bases
+
+
+def _accepts_new_directory(base, prefix):
+    """True when a new directory really can be created below base.
+
+    tempfile.mkdtemp() retries a PermissionError TMP_MAX times -- 2**31-1 on
+    Windows -- for as long as os.access() still reports the parent as writable,
+    so a parent that denies new subdirectories turns into an effectively endless
+    spin of failed mkdir() calls.  A single os.mkdir() probe settles it at once.
+    """
+    probe = Path(base) / ("%s-probe-%s" % (prefix, uuid.uuid4().hex[:12]))
+    try:
+        probe.mkdir()
+    except OSError:
+        return False
+    try:
+        probe.rmdir()
+    except OSError:  # pragma: no cover - the probe directory is ours
+        pass
+    return True
+
+
+def _note(message):
+    """Diagnostic on stderr for a run that had to skip a scratch base."""
+    print("toolchain: " + message, file=sys.stderr)
+
+
+def make_scratch_dir(prefix, workspace=None, subdirs=(), root=None):
+    """Create and register a private scratch directory, or raise RuntimeError.
+
+    The system temp directory is tried first; when a directory cannot be created
+    there (OSError -- e.g. a sandbox forbidding nested directories under %TEMP%)
+    the helper falls back to <workspace>/build/<prefix>-<pid>-<random>.  Every
+    candidate is made with tempfile.mkdtemp(), which is atomic and collision
+    free, and subdirs are created inside it right away, so a caller cannot fail
+    halfway through building a nested layout.  Pass root (or set
+    STRUCTURERESET_SCRATCH_ROOT) to put a different base in the system temp slot.
+
+    Every refused base and the base that was finally used are reported on
+    stderr, so the fallback a run actually took can be read from its output.
+    The normal path -- system temp writable, no override -- prints nothing.
+
+    The directory is registered for cleanup: cleanup_scratch_dirs() removes
+    whatever is still registered when the process exits, so a caller that never
+    removes its scratch directory still leaves nothing behind.
+    """
+    problem = None
+    fell_back = False
+    for base in _scratch_bases(workspace, root):
+        try:
+            base.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:  # a file is in the way, or the parent is refused
+            problem = exc
+        else:
+            if _accepts_new_directory(base, prefix):
+                try:
+                    directory = Path(tempfile.mkdtemp(
+                        prefix="%s-%d-" % (prefix, os.getpid()), dir=str(base)))
+                    for name in subdirs:
+                        (directory / name).mkdir(parents=True, exist_ok=True)
+                except OSError as exc:  # unwritable parent: next candidate
+                    problem = exc
+                else:
+                    _SCRATCH_DIRS.append(directory)
+                    if fell_back:
+                        _note("using workspace fallback scratch directory %s" % directory)
+                    return directory
+            else:
+                problem = PermissionError("cannot create a directory below %s" % base)
+        _note("scratch base %s is unusable (%s); trying the next candidate"
+              % (base, problem))
+        fell_back = True
+    raise RuntimeError("no writable private scratch directory for %r (%s)"
+                       % (prefix, problem))
+
+
+def release_scratch_dir(path):
+    """Forget a registered scratch directory a caller has removed itself."""
+    try:
+        _SCRATCH_DIRS.remove(Path(path))
+    except ValueError:
+        pass
+
+
+def cleanup_scratch_dirs():
+    """Remove every registered scratch directory that still exists."""
+    while _SCRATCH_DIRS:
+        shutil.rmtree(_SCRATCH_DIRS.pop(), ignore_errors=True)
+
+
+atexit.register(cleanup_scratch_dirs)

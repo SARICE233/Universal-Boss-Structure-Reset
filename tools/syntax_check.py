@@ -8,9 +8,14 @@ parser/syntax diagnostics are treated as failures: without a Minecraft
 classpath every symbol lookup fails, and those resolution errors are ignored
 on purpose.
 
+The checker has no shared mutable state at all: every javac run gets its own
+private scratch directory from tools/toolchain.py, so any number of invocations
+may overlap.  --selftest proves that by running two simultaneous invocations.
+
 Usage:
     python tools/syntax_check.py            # check src/main/java, exit 0 when clean
-    python tools/syntax_check.py --selftest # check the checker itself
+    python tools/syntax_check.py --selftest # check the checker itself, including
+                                            # two simultaneous invocations
 """
 
 from __future__ import annotations
@@ -20,7 +25,6 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 try:
@@ -129,13 +133,20 @@ def syntax_errors(diagnostics: str):
     return found
 
 
+def scratch_dir(prefix):
+    """Private scratch directory for one javac run (see tools/toolchain.py)."""
+    if toolchain is None:  # pragma: no cover - toolchain.py ships beside this file
+        raise RuntimeError("tools/toolchain.py is required to create a scratch directory")
+    return toolchain.make_scratch_dir(prefix, WORKSPACE)
+
+
 def check_files(files):
     """Return (exit code, syntax error lines) for a list of .java files."""
     javac = find_javac()
     if javac is None:
         print("FAIL: syntax-check: no javac is available", file=sys.stderr)
         return 2, ["no javac is available"]
-    out_dir = Path(tempfile.mkdtemp(prefix="structurereset-syntax-"))
+    out_dir = scratch_dir("structurereset-syntax")
     try:
         code, diag = run_javac(javac, files, out_dir)
     finally:
@@ -212,7 +223,7 @@ def _write(path: Path, text: str) -> None:
 
 
 def selftest() -> int:
-    tmp = Path(tempfile.mkdtemp(prefix="structurereset-syntax-selftest-"))
+    tmp = scratch_dir("structurereset-syntax-selftest")
     ok = True
     try:
         good = tmp / "good" / "Good.java"
@@ -246,8 +257,45 @@ def selftest() -> int:
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
+    if not parallel_selftest():
+        ok = False
+
     print("syntax-check selftest: " + ("OK" if ok else "FAILED"))
     return 0 if ok else 1
+
+
+def parallel_selftest() -> bool:
+    """Two simultaneous invocations must both succeed and agree.
+
+    Nothing in this checker writes to a fixed path -- every javac run is given a
+    private scratch directory -- so overlapping runs cannot disturb each other.
+    This keeps that property tested rather than assumed.
+    """
+    tmp = scratch_dir("structurereset-syntax-parallel")
+    ok = True
+    try:
+        good_dir = tmp / "good"
+        bad_dir = tmp / "bad"
+        _write(good_dir / "Good.java", _GOOD)
+        _write(bad_dir / "Bad.java", _BAD)
+        for label, java_root, expected in (("clean tree", good_dir, 0),
+                                           ("broken tree", bad_dir, 1)):
+            children = [subprocess.Popen(
+                [sys.executable, str(SCRIPT), "--java-root", str(java_root)],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, encoding="utf-8", errors="replace") for _ in range(2)]
+            codes = []
+            for child in children:
+                child.communicate()
+                codes.append(child.returncode)
+            print("selftest: two simultaneous syntax checks of a %s pid=%s -> exit codes %s"
+                  % (label, [child.pid for child in children], codes))
+            if any(code != expected for code in codes):
+                print("FAIL: selftest: simultaneous syntax checks disagreed on a %s" % label)
+                ok = False
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    return ok
 
 
 def main(argv) -> int:

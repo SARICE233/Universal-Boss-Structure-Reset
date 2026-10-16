@@ -4,7 +4,7 @@
 This is the offline replacement for "gradlew test":
 
 * javac (JDK 17) compiles every source under src/main/java/com/structurereset/api
-  together with every source under src/test/java into build/test-classes;
+  together with every source under src/test/java;
 * the JUnit Platform console standalone jar supplies the JUnit 5 API, engine and
   launcher.  It is cached under tools/lib and downloaded from repo1.maven.org
   with a browser User-Agent only when that cache is empty -- never unpacked into
@@ -12,9 +12,28 @@ This is the offline replacement for "gradlew test":
 * the suite is launched from that jar and its XML report is parsed, so the counts
   printed below come from a real execution, not from a grep of the sources.
 
+Re-entrancy.  Every invocation compiles into its own private scratch directory,
+
+    <temp>/structurereset-run-tests-<pid>-<token>/{classes,reports}
+
+(or <workspace>/build/... when the system temp directory cannot hold a new
+directory, see tools/toolchain.py),
+and the SUMMARY tally is read from the reports directory of that very directory.
+Nothing is written to a fixed, shared path any more, so any number of invocations
+may overlap: they cannot clean or read each other's classes and JUnit XML.  The
+fixed build/test-classes and build/test-reports directories that older revisions
+shared are no longer used and are deleted after the run.  --selftest proves this
+by starting two invocations at the same time.
+
 Usage:
     python tools/run_tests.py              # compile + run, exit 0 when green
     python tools/run_tests.py --selftest   # prove the runner detects failing suites
+                                           # and that two simultaneous runs agree
+    python tools/run_tests.py --scratch-root DIR   # use DIR instead of the system
+                                                   # temp directory; point it at an
+                                                   # unwritable DIR to exercise the
+                                                   # <workspace>/build fallback
+    python tools/run_tests.py --keep-scratch       # keep it for inspection
 
 Machine readable result (always the last line):
     SUMMARY tests=<n> failures=<n> errors=<n>
@@ -28,7 +47,7 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
+import time
 import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -55,6 +74,12 @@ BROWSER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 JAVA_RELEASE = "17"
 
+#: build/<name> directories that older revisions compiled into.  They are no
+#: longer used by this script and are removed after every run.
+LEGACY_SHARED_DIRS = ("test-classes", "test-reports")
+
+SUMMARY_RE = re.compile(r"^SUMMARY tests=(\d+) failures=(\d+) errors=(\d+)[ \t]*$", re.MULTILINE)
+
 
 class SuiteResult:
     """Outcome of one compile + JUnit run."""
@@ -69,6 +94,37 @@ class SuiteResult:
 
     def summary_line(self):
         return "SUMMARY tests=%d failures=%d errors=%d" % (self.tests, self.failures, self.errors)
+
+
+# --------------------------------------------- per-invocation scratch dirs
+
+def legacy_shared_dirs(workspace):
+    """The fixed build/ directories older revisions compiled and reported into."""
+    return [Path(workspace) / "build" / name for name in LEGACY_SHARED_DIRS]
+
+
+def purge_legacy_shared_dirs(workspace, log=None):
+    """Best effort removal of the shared build/ dirs this script no longer uses."""
+    for directory in legacy_shared_dirs(workspace):
+        if not directory.is_dir():
+            continue
+        shutil.rmtree(directory, ignore_errors=True)
+        if directory.exists() and log is not None:
+            log("run-tests: note -- stale shared dir %s could not be removed" % directory)
+
+
+def make_run_dirs(workspace, scratch_root=None):
+    """(run_dir, classes_dir, reports_dir) private to this process invocation.
+
+    The name carries the pid and a random token, so two invocations that overlap
+    can never collide even when they share the same parent directory.  The
+    parent itself is picked by tools/toolchain.py, which falls back to
+    <workspace>/build when the system temp directory cannot hold a new one.
+    """
+    run_dir = toolchain.make_scratch_dir("structurereset-run-tests", workspace,
+                                         subdirs=("classes", "reports"),
+                                         root=scratch_root)
+    return run_dir, run_dir / "classes", run_dir / "reports"
 
 
 # ------------------------------------------------------------- JUnit jar
@@ -173,7 +229,12 @@ def run_console(java_path, junit_jar, classes_dir, reports_dir, workspace):
 
 
 def parse_reports(reports_dir):
-    """Read the JUnit XML reports; None when no report was written."""
+    """Read the JUnit XML reports of one directory; None when none was written.
+
+    reports_dir is always the private reports directory of the current
+    invocation, never a shared one, so the tally counts exactly the tests this
+    run executed.
+    """
     totals = {"tests": 0, "failures": 0, "errors": 0}
     seen = False
     for path in sorted(Path(reports_dir).glob("TEST-*.xml")):
@@ -199,8 +260,13 @@ def parse_console(text):
     return {"tests": number("found"), "failures": number("failed"), "errors": 0}
 
 
-def execute(workspace, junit_jar, verbose=False):
-    """Compile api + test sources and run them; returns a SuiteResult."""
+def execute(workspace, junit_jar, verbose=False, scratch_root=None, keep_scratch=False,
+            log=print):
+    """Compile api + test sources and run them; returns a SuiteResult.
+
+    All intermediate and output files live in a directory private to this call,
+    which is removed again unless keep_scratch is set.
+    """
     workspace = Path(workspace).resolve()
     api_root = workspace / "src" / "main" / "java" / "com" / "structurereset" / "api"
     test_root = workspace / "src" / "test" / "java"
@@ -215,35 +281,39 @@ def execute(workspace, junit_jar, verbose=False):
     api_sources = collect_java(api_root)
     sources = api_sources + test_sources
 
-    classes_dir = workspace / "build" / "test-classes"
-    reports_dir = workspace / "build" / "test-reports"
-    for directory in (classes_dir, reports_dir):
-        shutil.rmtree(directory, ignore_errors=True)
+    run_dir, classes_dir, reports_dir = make_run_dirs(workspace, scratch_root)
+    try:
+        if verbose:
+            print("run-tests: " + toolchain.describe(jdk))
+            print("run-tests: junit  = %s" % junit_jar)
+            print("run-tests: private scratch dir = %s" % run_dir)
+        print("run-tests: compiling %d api source(s) + %d test source(s)"
+              % (len(api_sources), len(test_sources)))
 
-    if verbose:
-        print("run-tests: " + toolchain.describe(jdk))
-        print("run-tests: junit  = %s" % junit_jar)
-    print("run-tests: compiling %d api source(s) + %d test source(s)"
-          % (len(api_sources), len(test_sources)))
+        code, output = compile_sources(javac_path, sources, junit_jar, classes_dir)
+        if code != 0:
+            print(output.rstrip())
+            return SuiteResult(exit_code=1, output=output, note="javac failed")
 
-    code, output = compile_sources(javac_path, sources, junit_jar, classes_dir)
-    if code != 0:
-        print(output.rstrip())
-        return SuiteResult(exit_code=1, output=output, note="javac failed")
-
-    code, output = run_console(java_path, junit_jar, classes_dir, reports_dir, workspace)
-    counts = parse_reports(reports_dir) or parse_console(output)
-    tests = counts["tests"]
-    failures = counts["failures"]
-    errors = counts["errors"]
-    # A source tree with tests that execute nothing is a failure, never a pass.
-    drained = tests == 0
-    exit_code = 0 if (code == 0 and failures == 0 and errors == 0 and not drained) else 1
-    note = "junit console exit=%d" % code
-    if drained:
-        note += " (no test was executed)"
-    return SuiteResult(tests=tests, failures=failures, errors=errors,
-                       exit_code=exit_code, output=output, note=note)
+        code, output = run_console(java_path, junit_jar, classes_dir, reports_dir, workspace)
+        counts = parse_reports(reports_dir) or parse_console(output)
+        tests = counts["tests"]
+        failures = counts["failures"]
+        errors = counts["errors"]
+        # A source tree with tests that execute nothing is a failure, never a pass.
+        drained = tests == 0
+        exit_code = 0 if (code == 0 and failures == 0 and errors == 0 and not drained) else 1
+        note = "junit console exit=%d" % code
+        if drained:
+            note += " (no test was executed)"
+        return SuiteResult(tests=tests, failures=failures, errors=errors,
+                           exit_code=exit_code, output=output, note=note)
+    finally:
+        if keep_scratch:
+            print("run-tests: kept private scratch dir %s" % run_dir)
+        else:
+            shutil.rmtree(run_dir, ignore_errors=True)
+        purge_legacy_shared_dirs(workspace, log=log if verbose else None)
 
 
 # -------------------------------------------------------------- selftest
@@ -304,14 +374,145 @@ def _write(path, text):
     return path
 
 
+def parse_summary(text):
+    """The last SUMMARY line of a finished invocation, or None."""
+    matches = SUMMARY_RE.findall(text or "")
+    if not matches:
+        return None
+    tests, failures, errors = matches[-1]
+    return {"tests": int(tests), "failures": int(failures), "errors": int(errors)}
+
+
+def render_summary(summary):
+    if not summary:
+        return "no SUMMARY line"
+    return "tests=%d failures=%d errors=%d" % (summary["tests"], summary["failures"],
+                                               summary["errors"])
+
+
+def spawn_entry_point(args, cwd=None):
+    """Start 'python tools/run_tests.py <args>' as a child process."""
+    command = [sys.executable, str(SCRIPT)] + [str(argument) for argument in args]
+    return subprocess.Popen(command, cwd=str(cwd or WORKSPACE),
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, encoding="utf-8", errors="replace")
+
+
+def wait_entry_point(child, timeout=900):
+    """(exit code, stdout, stderr, timed out) of a child started here."""
+    try:
+        out, err = child.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        child.kill()
+        out, err = child.communicate()
+        return None, out or "", err or "", True
+    return child.returncode, out or "", err or "", False
+
+
+def selftest_parallel_entry_point():
+    """Start two real invocations at once; both must report the same green count."""
+    ok = True
+    launched = []
+    for label in ("A", "B"):
+        started = time.monotonic()
+        child = spawn_entry_point(["--quiet"])
+        launched.append((label, child, started))
+
+    outcomes = []
+    for label, child, started in launched:
+        code, out, err, timed_out = wait_entry_point(child)
+        outcomes.append({
+            "label": label,
+            "pid": child.pid,
+            "code": code,
+            "out": out,
+            "err": err,
+            "timed_out": timed_out,
+            "summary": parse_summary(out),
+            "started": started,
+            "finished": time.monotonic(),
+        })
+
+    for outcome in outcomes:
+        print("selftest: simultaneous invocation %s pid=%d exit=%s SUMMARY %s elapsed=%.2fs"
+              % (outcome["label"], outcome["pid"], outcome["code"],
+                 render_summary(outcome["summary"]),
+                 outcome["finished"] - outcome["started"]))
+
+    overlap_start = max(o["started"] for o in outcomes)
+    overlap_end = min(o["finished"] for o in outcomes)
+    if overlap_end > overlap_start:
+        print("selftest: the two invocations really ran at the same time (overlap %.2fs)"
+              % (overlap_end - overlap_start))
+    else:
+        print("FAIL: selftest: the two invocations did not overlap in wall clock time")
+        ok = False
+
+    if len({o["pid"] for o in outcomes}) != 2:
+        print("FAIL: selftest: the two invocations did not get distinct processes")
+        ok = False
+
+    for outcome in outcomes:
+        if outcome["timed_out"]:
+            print("FAIL: selftest: invocation %s did not finish" % outcome["label"])
+            ok = False
+            continue
+        if outcome["code"] != 0:
+            print("FAIL: selftest: invocation %s exited %s" % (outcome["label"], outcome["code"]))
+            tail = (outcome["err"] or outcome["out"] or "").strip().splitlines()[-3:]
+            for line in tail:
+                print("      %s -> %s" % (outcome["label"], line))
+            ok = False
+        if outcome["summary"] is None:
+            print("FAIL: selftest: invocation %s printed no SUMMARY line" % outcome["label"])
+            ok = False
+        elif outcome["summary"]["failures"] or outcome["summary"]["errors"]:
+            print("FAIL: selftest: invocation %s did not report a green suite"
+                  % outcome["label"])
+            ok = False
+
+    known = [o["summary"] for o in outcomes if o["summary"]]
+    counts = {summary["tests"] for summary in known}
+    if len(known) != len(outcomes) or len(counts) != 1 or not counts or min(counts) <= 0:
+        print("FAIL: selftest: the simultaneous invocations did not agree on one non-zero count")
+        ok = False
+    else:
+        print("selftest: both simultaneous invocations reported the identical non-zero "
+              "count: tests=%d failures=0 errors=0" % counts.pop())
+    return ok
+
+
+def selftest_broken_suite(tmp):
+    """The entry point must exit non-zero for a deliberately failing suite."""
+    broken = tmp / "cli-broken"
+    _write(broken / "src" / "test" / "java" / "sample" / "FailingTest.java", FAILING_TEST)
+    child = spawn_entry_point(["--workspace", broken, "--quiet"])
+    code, out, err, timed_out = wait_entry_point(child)
+    summary = parse_summary(out)
+    print("selftest: deliberately failing suite through the entry point pid=%d exit=%s "
+          "SUMMARY %s" % (child.pid, code, render_summary(summary)))
+    if timed_out or code in (None, 0) or summary is None or summary["failures"] < 1:
+        print("FAIL: selftest: a deliberately failing suite did not make the entry point "
+              "exit non-zero")
+        if err.strip():
+            print("      stderr: %s" % err.strip().splitlines()[-1])
+        return False
+    return True
+
+
 def selftest():
-    """Prove that the runner reports green suites as passes and red ones as failures."""
+    """Prove the runner reports green suites as passes and red ones as failures.
+
+    The last part is the re-entrancy proof: two invocations of the real entry
+    point are started at the same time and have to report the same non-zero test
+    count with exit code 0.
+    """
     junit_jar = ensure_junit()
     if junit_jar is None:
         print("FAIL: selftest: the JUnit console jar is not available")
         return 1
 
-    tmp = Path(tempfile.mkdtemp(prefix="structurereset-runtests-selftest-"))
+    tmp = toolchain.make_scratch_dir("structurereset-runtests-selftest", WORKSPACE)
     ok = True
     try:
         green = tmp / "green"
@@ -345,6 +546,12 @@ def selftest():
         if result.exit_code != 0 or result.tests != 0:
             print("FAIL: selftest: an empty test tree must report tests=0 and exit 0")
             ok = False
+
+        if not selftest_broken_suite(tmp):
+            ok = False
+
+        if not selftest_parallel_entry_point():
+            ok = False
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -357,10 +564,18 @@ def selftest():
 def main(argv):
     parser = argparse.ArgumentParser(description="Compile and run the JUnit 5 suite offline.")
     parser.add_argument("--selftest", action="store_true",
-                        help="prove the runner detects failing suites")
+                        help="prove the runner detects failing suites and that two "
+                             "simultaneous invocations agree")
     parser.add_argument("--workspace", default=None, help="Project root")
     parser.add_argument("--no-download", action="store_true", help="never touch the network")
     parser.add_argument("--quiet", action="store_true", help="only print the SUMMARY line")
+    parser.add_argument("--scratch-root", default=None,
+                        help="Use this directory instead of the system temp directory as "
+                             "the parent of this run's private scratch directory; when it "
+                             "cannot hold a new directory the tool falls back to "
+                             "<workspace>/build (default: the system temp directory)")
+    parser.add_argument("--keep-scratch", action="store_true",
+                        help="keep this run's private scratch directory for inspection")
     args = parser.parse_args(argv)
 
     workspace = Path(args.workspace).resolve() if args.workspace else WORKSPACE
@@ -374,7 +589,13 @@ def main(argv):
         print("SUMMARY tests=0 failures=0 errors=0")
         return 2
 
-    result = execute(workspace, junit_jar, verbose=not args.quiet)
+    try:
+        result = execute(workspace, junit_jar, verbose=not args.quiet,
+                         scratch_root=args.scratch_root, keep_scratch=args.keep_scratch)
+    except RuntimeError as exc:
+        print("FAIL: run-tests: %s" % exc, file=sys.stderr)
+        print("SUMMARY tests=0 failures=0 errors=0")
+        return 2
     if result.output and not args.quiet:
         print(result.output.rstrip())
     if result.note:

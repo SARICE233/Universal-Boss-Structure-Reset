@@ -87,12 +87,17 @@ public final class StructureResetClient {
     public static void onModifyBakingResult(ModelEvent.ModifyBakingResult event) {
         loadDefaults();
         Map<Item, ResourceLocation> overrides = ItemAppearanceApi.modelOverrides();
-        if (overrides.isEmpty()) {
-            return;
-        }
         // Forge types the baked registry by ResourceLocation, while the block and
         // item models inside it are keyed by their "#inventory" ModelResourceLocation
         Map<ResourceLocation, BakedModel> models = event.getModels();
+        // The glow pass belongs to this mod's own item models, not to the
+        // appearance overrides: with the shipped (empty) item_appearance.json the
+        // early return used to skip it, which left every glow texture and
+        // EmissiveItemModel unreachable.
+        addGlowPass(models);
+        if (overrides.isEmpty()) {
+            return;
+        }
         for (Map.Entry<Item, ResourceLocation> override : overrides.entrySet()) {
             ResourceLocation itemId = ForgeRegistries.ITEMS.getKey(override.getKey());
             ResourceLocation targetId = override.getValue();
@@ -110,7 +115,6 @@ public final class StructureResetClient {
             models.put(from, replacement);
             StructureResetMod.LOGGER.debug("[{}] appearance override of {} -> {}", StructureResetMod.MODID, itemId, targetId);
         }
-        addGlowPass(models);
     }
 
     /**

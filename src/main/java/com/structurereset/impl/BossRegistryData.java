@@ -134,6 +134,17 @@ public final class BossRegistryData extends SavedData {
         }
     }
 
+    /**
+     * How many records the store keeps before the oldest history is dropped.
+     *
+     * <p>Every boss the mod observes leaves a record, and the file is re-serialised
+     * as one JSON array on every save, so an uncapped store grows without bound on
+     * a long lived server. The cap only ever drops records that are already
+     * history - respawned bosses waiting nowhere - so a boss that is alive, waiting
+     * for a respawn or awaiting its death confirmation is never dropped.</p>
+     */
+    public static final int MAX_RECORDS = 512;
+
     private final TreeMap<String, BossRecord> records = new TreeMap<>();
 
     /** The registry of {@code server}, creating the store when it does not exist yet. */
@@ -195,11 +206,6 @@ public final class BossRegistryData extends SavedData {
         return tag;
     }
 
-    /** Every record, oldest UUID first. */
-    public List<BossRecord> all() {
-        return List.copyOf(records.values());
-    }
-
     /** The record of one boss, or empty when it is unknown. */
     public Optional<BossRecord> byUuid(String uuid) {
         if (uuid == null) {
@@ -214,29 +220,47 @@ public final class BossRegistryData extends SavedData {
             return;
         }
         records.put(record.bossUuid(), record);
+        prune();
         setDirty(true);
     }
 
-    /** Forgets one boss; true when something was removed. */
-    public boolean remove(String uuid) {
-        boolean removed = uuid != null && records.remove(uuid) != null;
-        if (removed) {
-            setDirty(true);
+    /**
+     * Drops the oldest respawned records while the store is over
+     * {@link #MAX_RECORDS}.
+     *
+     * <p>{@link #awaitingRespawn} matches a defeated record and
+     * {@link #closestLiving} matches an undefeated one, so a record stays the only
+     * memory of its boss for as long as that boss has never been brought back
+     * ({@code resetCount == 0}) or is still waiting for its respawn
+     * ({@code defeated}). Both kinds are kept. What may be dropped is a record that
+     * was already brought back at least once and is not waiting again: its boss is
+     * either alive somewhere with nothing left to replay or it is gone, so the loop
+     * stops as soon as it finds nothing it may drop.</p>
+     *
+     * <p>The cap is a safety net for a long lived server, not a normal event, and it
+     * has one deliberate cost: {@link #closestLiving} is also the death confirmation
+     * net, so a boss whose record was pruned more than {@link #MAX_RECORDS} records
+     * ago can no longer be confirmed dead. Bounding the store is worth that loss,
+     * which only ever affects very old respawns.</p>
+     */
+    private void prune() {
+        while (records.size() > MAX_RECORDS) {
+            String oldest = null;
+            long oldestTime = Long.MAX_VALUE;
+            for (BossRecord record : records.values()) {
+                if (record.defeated() || record.resetCount() <= 0) {
+                    continue;
+                }
+                if (record.spawnGameTime() < oldestTime) {
+                    oldestTime = record.spawnGameTime();
+                    oldest = record.bossUuid();
+                }
+            }
+            if (oldest == null) {
+                return;
+            }
+            records.remove(oldest);
         }
-        return removed;
-    }
-
-    /** Forgets every record. */
-    public void clear() {
-        if (!records.isEmpty()) {
-            records.clear();
-            setDirty(true);
-        }
-    }
-
-    /** How many bosses are remembered. */
-    public int size() {
-        return records.size();
     }
 
     /**
@@ -291,20 +315,6 @@ public final class BossRegistryData extends SavedData {
             double distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
             if (distance <= radius && distance < bestDistance) {
                 bestDistance = distance;
-                best = record;
-            }
-        }
-        return Optional.ofNullable(best);
-    }
-
-    /** The newest record of the given structures, beaten or not. */
-    public Optional<BossRecord> knownIn(String dimension, Collection<String> structureIds) {
-        BossRecord best = null;
-        for (BossRecord record : records.values()) {
-            if (!record.covers(dimension, structureIds)) {
-                continue;
-            }
-            if (best == null || record.spawnGameTime() > best.spawnGameTime()) {
                 best = record;
             }
         }

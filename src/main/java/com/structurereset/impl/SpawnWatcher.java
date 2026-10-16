@@ -35,7 +35,7 @@ public final class SpawnWatcher {
     /** How far a boss may move before the move is worth telling the players about. */
     private static final double MOVED_LIMIT = 4.0D;
 
-    /** How many watches are kept at most. */
+    /** How many watches are kept at most, in both indexes. */
     private static final int MAX_WATCHED = 64;
 
     /**
@@ -48,7 +48,13 @@ public final class SpawnWatcher {
                          long spawnedAt, long reportAt, BlockPos marked) {
     }
 
-    /** The watches by uuid, so an entity leaving the level can be recognised. */
+    /**
+     * The watches by uuid, so an entity leaving the level can be recognised.
+     *
+     * <p>Kept in step with {@link #WATCHED}: the same bound, the same removals.
+     * A watch that only lived here would pin its entity for the lifetime of the
+     * server, which is a leak that grows with every boss ever summoned.</p>
+     */
     private static final Map<UUID, Watch> BY_UUID = new LinkedHashMap<>();
 
     private static final Map<UUID, Watch> WATCHED = new LinkedHashMap<>();
@@ -142,6 +148,17 @@ public final class SpawnWatcher {
         }
         for (UUID uuid : finished) {
             WATCHED.remove(uuid);
+        }
+        // BY_UUID holds the same watches, so it has to forget them in exactly the
+        // same place; the bound below is the second safety net for the case where
+        // an entity is removed without ever passing through onRemoved().
+        for (UUID uuid : finished) {
+            BY_UUID.remove(uuid);
+        }
+        while (BY_UUID.size() > MAX_WATCHED) {
+            UUID oldest = BY_UUID.keySet().iterator().next();
+            BY_UUID.remove(oldest);
+            WATCHED.remove(oldest);
         }
     }
 

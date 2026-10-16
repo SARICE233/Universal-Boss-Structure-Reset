@@ -4,7 +4,6 @@ import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import com.structurereset.api.LearnedAnchor;
-import com.structurereset.config.StructureResetConfig;
 import com.structurereset.impl.LearnedAnchorService;
 import java.util.List;
 import net.minecraft.commands.CommandSourceStack;
@@ -12,9 +11,6 @@ import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.world.entity.LivingEntity;
-import net.minecraft.world.entity.player.Player;
-import net.minecraft.world.phys.AABB;
 
 /**
  * The operator command tree of the addon.
@@ -24,19 +20,27 @@ import net.minecraft.world.phys.AABB;
  * console) ever reach it:</p>
  *
  * <pre>
- * /structurereset learned list
- * /structurereset learned remove &lt;id&gt;
- * /structurereset learned clear
- * /structurereset learned clear confirm
- * /structurereset learned teach-here
+ * /structurereset records list
+ * /structurereset records remove &lt;id&gt;
+ * /structurereset records clear
+ * /structurereset records clear confirm
+ * /structurereset records teach-here &lt;entity&gt;
  * </pre>
  *
- * <p>{@code learned list} prints one line per remembered anchor, {@code learned
- * remove} forgets a single record and {@code learned clear} deliberately needs
- * the explicit trailing {@code confirm} before it wipes everything. {@code
- * learned teach-here} is the command line twin of sneaking and using the core on
- * a mob: it teaches the living entity nearest to the executing player within
- * {@link StructureResetConfig#learningRadius()}.</p>
+ * <p>The whole tree is registered twice: once under {@code records} and once
+ * under the old name {@code learned}, which stays as an alias for servers and
+ * scripts written before the rename. Both registrations expose exactly the same
+ * five sub commands.</p>
+ *
+ * <p>{@code records list} prints one line per remembered anchor, {@code records
+ * remove <id>} forgets a single record and {@code records clear} deliberately
+ * needs the explicit trailing {@code confirm} before it wipes everything.
+ * {@code records teach-here <entity>} is the command line twin of sneaking and
+ * using the core on a mob: the operator names the entity to record and the
+ * record is anchored at the operator's own position. It skips only the two
+ * positional gates of the item path (stand inside a structure, look at the
+ * target); the enable switch and the whole entity classification still
+ * apply.</p>
  *
  * <p>Every reply goes through {@code source.sendSuccess(..., false)} so it is
  * broadcast to the command source only, and each sub command returns 1 when it
@@ -154,7 +158,7 @@ public final class StructureResetCommand {
     }
 
     /**
-     * The bare {@code learned clear}: it only asks for the confirmation and
+     * The bare {@code records clear}: it only asks for the confirmation and
      * never deletes anything.
      *
      * @param source the command source
@@ -166,7 +170,7 @@ public final class StructureResetCommand {
     }
 
     /**
-     * {@code learned clear confirm}: wipes every record and reports how many
+     * {@code records clear confirm}: wipes every record and reports how many
      * were removed.
      *
      * @param source the command source
@@ -181,11 +185,19 @@ public final class StructureResetCommand {
     }
 
     /**
-     * {@code learned teach-here}: teaches the living entity nearest to the
-     * executing player, within {@link StructureResetConfig#learningRadius()}.
+     * {@code records teach-here <entity>}: records the named entity as the boss of
+     * the structure the operator stands in, anchored at the operator's own
+     * position.
+     *
+     * <p>It skips only the two positional gates of the item path: the operator does
+     * not have to stand inside a structure this mod can see and does not have to
+     * look at the target. The enable switch and the whole entity classification
+     * still apply, so the command can never record a mob the sneaking right click
+     * would refuse.</p>
      *
      * @param source the command source, which must be a player
-     * @return 1 when an anchor was recorded, 0 when there was no target or the
+     * @param entityId the entity type id the new record should name
+     * @return 1 when an anchor was recorded, 0 when the id was unknown or the
      *         teaching was refused
      * @throws CommandSyntaxException when the source is not a player
      */

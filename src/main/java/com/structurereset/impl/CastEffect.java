@@ -137,6 +137,23 @@ public final class CastEffect {
         return level.addFreshEntity(display) ? display : null;
     }
 
+    /**
+     * Releases every running cast and every block display it owns.
+     *
+     * <p>Used when the server stops: a cast that is interrupted mid flight would
+     * otherwise leave its {@code block_display} entities in the save file, floating
+     * over the structure until somebody removes them by hand.</p>
+     */
+    public static void clearAll() {
+        for (Cast cast : new ArrayList<>(CASTS.values())) {
+            for (Display.BlockDisplay display : cast.shown) {
+                display.discard();
+            }
+            cast.shown.clear();
+        }
+        CASTS.clear();
+    }
+
     /** Forgets a cast and removes the blocks it was showing. */
     public static void clear(ServerPlayer player) {
         if (player == null) {

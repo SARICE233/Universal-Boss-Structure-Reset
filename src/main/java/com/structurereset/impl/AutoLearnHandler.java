@@ -11,8 +11,8 @@ import org.slf4j.Logger;
 import com.mojang.logging.LogUtils;
 
 /**
- * The optional automatic learning layer (S3): the mapping learns itself from
- * what happens in the world instead of from a player aiming at a boss.
+ * The automatic boss tracking layer: it keeps the boss registry (spawn point,
+ * facing and death) up to date from what happens in the world.
  *
  * <p>Two observations are used. A boss that <em>enters the world</em> inside a
  * structure is usually the boss that structure just generated, and a boss that
@@ -20,10 +20,16 @@ import com.mojang.logging.LogUtils;
  * strongest possible evidence, and it also yields the position where the boss
  * should come back.</p>
  *
- * <p>This is deliberately off by default: it writes records on its own, so a
- * pack author turns it on knowingly. Everything it writes is {@link
- * LearnedAnchorService#autoLearn} guarded, which never restates a structure an
- * earlier (stronger) record already covers.</p>
+ * <p>This layer has no switch of its own and is always registered: the
+ * {@code resetRequiresDefeated} gate reads the world, and
+ * {@link BossBindingService} supplies the spawn point a later respawn uses.
+ * What it writes is only that registry - a learned <em>structure record</em>,
+ * the thing that decides which boss a right click brings back, is never written
+ * here. Every structure record comes from a player or an operator asking for
+ * one: sneak + right click a mob, the structure scan, or
+ * {@code /structurereset records teach-here}. The learning switches
+ * ({@code learningEnabled} and friends) gate those teaching entry points, not
+ * this observer.</p>
  */
 public final class AutoLearnHandler {
 

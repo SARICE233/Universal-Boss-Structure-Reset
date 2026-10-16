@@ -112,8 +112,10 @@ public final class RestoreLearnedAnchorAction implements ResetActionType {
             }
             // The record says this entity is the boss here, so it is bound on the
             // spot: an untracked respawned boss could never be confirmed dead and
-            // would lock the structure out of every later reset.
-            if (entity instanceof net.minecraft.world.entity.LivingEntity living) {
+            // would lock the structure out of every later reset. An entity that was
+            // discarded above (a known unrestorable boss) is never bound: that would
+            // leave a ghost record for a boss that never entered the world.
+            if (!entity.isRemoved() && entity instanceof net.minecraft.world.entity.LivingEntity living) {
                 com.structurereset.impl.BossBindingService.bind(level, living,
                         anchor.bossEntity(), "respawned");
             }

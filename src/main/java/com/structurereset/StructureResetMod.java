@@ -90,6 +90,9 @@ public class StructureResetMod {
         MinecraftForge.EVENT_BUS.addListener((net.minecraftforge.event.server.ServerStoppingEvent event) -> {
             com.structurereset.impl.CastBar.stopAll();
             com.structurereset.impl.SpawnWatcher.clear();
+            // A cast in flight owns block_display entities; without this they stay in
+            // the save file as ordinary entities after a shutdown or a crash.
+            com.structurereset.impl.CastEffect.clearAll();
         });
         // Every spawned boss is looked at again a few seconds later, so a boss that
         // was pushed away or that vanished is visible in the log instead of leaving

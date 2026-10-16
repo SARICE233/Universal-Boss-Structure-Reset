@@ -118,7 +118,7 @@ public final class StructureResetConfig {
      * taught where the structure manager really sees a structure. Turning it off
      * allows teaching anywhere, which is what a hand built arena needs - the
      * operator then carries the risk of teaching the wrong place, and
-     * {@code /structurereset learned teach-here} remains the targeted way to do
+     * {@code /structurereset records teach-here} remains the targeted way to do
      * it.</p>
      */
     public static boolean learningRequireStructure() {
@@ -185,24 +185,6 @@ public final class StructureResetConfig {
     public static List<String> learningBossTags() {
         return stringList(COMMON == null ? null : COMMON.learningBossTags,
                 List.of("forge:bosses", "c:bosses", "structurereset:known_bosses"));
-    }
-
-    /** When true the crafting recipe is built from the recipe.* settings below. */
-    public static boolean recipeEnabled() {
-        return bool(COMMON == null ? null : COMMON.recipeEnabled, false);
-    }
-
-    /** How many cores one crafted result yields when the config recipe is on. */
-    public static int recipeResultCount() {
-        return integer(COMMON == null ? null : COMMON.recipeResultCount, 1);
-    }
-
-    /**
-     * The nine recipe slots in row-major order; an empty entry means an empty
-     * slot and every other entry is an item id (no per-slot count syntax).
-     */
-    public static List<String> recipeSlots() {
-        return stringList(COMMON == null ? null : COMMON.recipeSlots, List.of());
     }
 
     /** The null-safe list reader shared by every list valued accessor. */
@@ -378,9 +360,6 @@ public final class StructureResetConfig {
         public final ForgeConfigSpec.IntValue aimWindowTicks;
         public final ForgeConfigSpec.IntValue aimCastTicks;
         public final ForgeConfigSpec.IntValue aimReach;
-        public final ForgeConfigSpec.BooleanValue recipeEnabled;
-        public final ForgeConfigSpec.IntValue recipeResultCount;
-        public final ForgeConfigSpec.ConfigValue<List<? extends String>> recipeSlots;
 
         Common(ForgeConfigSpec.Builder builder) {
             builder.comment("Structure Reset - common settings").push("general");
@@ -428,7 +407,7 @@ public final class StructureResetConfig {
                     .comment("Largest angle, in degrees, between the player's look direction",
                             "and the direction to the target at which teaching the target by",
                             "right clicking the core on it is accepted. Only the item path is",
-                            "gated on this; /structurereset learned teach-here skips it.")
+                            "gated on this; /structurereset records teach-here skips it.")
                     .defineInRange("learningMaxAngleDegrees", 45, 1, 180);
             this.learningBossNbtKeys = builder
                     .comment("Top level NBT keys that additionally mark a target as a boss.",
@@ -450,7 +429,7 @@ public final class StructureResetConfig {
                     .comment("When true the teaching player must stand inside a recognised",
                             "structure. Set it to false to allow teaching anywhere - useful",
                             "for hand built arenas, at the price of a bigger mis-teaching",
-                            "risk. /structurereset learned teach-here stays the targeted",
+                            "risk. /structurereset records teach-here stays the targeted",
                             "way to register a boss outside any structure.")
                     .define("learningRequireStructure", true);
             this.resetRequiresDefeated = builder
@@ -501,29 +480,6 @@ public final class StructureResetConfig {
                             "its bosses needs no configuration at all.")
                     .defineList("learningBossTags",
                             java.util.List.of("forge:bosses", "c:bosses", "structurereset:known_bosses"),
-                            element -> element instanceof String);
-            builder.pop();
-            builder.comment("Structure Reset - optional config driven crafting recipe",
-                    "Disabled by default: the bundled data pack recipe in",
-                    "data/structurereset/recipes/structure_reset_core.json is used instead.").push("recipe");
-            this.recipeEnabled = builder
-                    .comment("When true the core recipe is built from the recipe.* settings",
-                            "below instead of relying on the bundled data pack recipe; the",
-                            "bundled recipe is then replaced, never duplicated.")
-                    .define("enabled", false);
-            this.recipeResultCount = builder
-                    .comment("How many structure reset cores one craft yields.")
-                    .defineInRange("result_count", 1, 1, 64);
-            this.recipeSlots = builder
-                    .comment("The nine recipe slots in row-major order (top left to bottom",
-                            "right). An empty string is an empty slot; every other entry is",
-                            "an item id such as 'minecraft:diamond' and contributes exactly",
-                            "one item - there is no per-slot count notation.")
-                    .defineList("slots", java.util.List.of(
-                                    "minecraft:diamond", "minecraft:ancient_debris", "minecraft:diamond",
-                                    "minecraft:ancient_debris", "minecraft:nether_star",
-                                    "minecraft:ancient_debris",
-                                    "minecraft:diamond", "minecraft:ancient_debris", "minecraft:diamond"),
                             element -> element instanceof String);
             builder.pop();
         }

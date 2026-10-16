@@ -137,49 +137,19 @@ public final class LearnedAnchorService {
      * to actually look at the target. A refusal reports
      * {@link #MESSAGE_NO_STRUCTURE} or {@link #MESSAGE_NOT_LOOKING}.</p>
      *
-     * <p>The boss criterion, in order: a registered script filter
-     * ({@code com.structurereset.core.BossFilterApi}) decides alone when one
-     * exists; otherwise the target is a boss when
-     * {@code learningMinMaxHealth} is zero or negative (no health check at all,
-     * the shipped default), or when its maximum health reaches
-     * {@code learningMinMaxHealth}, or when {@code learningBossNbtKeys} is
-     * non-empty and at least one of those keys is present in its NBT. A target
-     * that fails every one of those reports {@link #MESSAGE_TOO_WEAK}.</p>
+     * <p>The boss criterion is the layered classification of {@link #classify}:
+     * a registered script filter ({@code com.structurereset.core.BossFilterApi})
+     * decides alone when one exists, then the allow list, the excluded
+     * namespaces and the deny list apply, then the boss entity tags named by
+     * {@code learningBossTags}, then the optional {@code learningBossNbtKeys} and
+     * finally the {@code learningMinMaxHealth} threshold (0 disables it). A
+     * target that fails every one of those reports {@link #MESSAGE_TOO_WEAK}.</p>
      *
      * @param player the player doing the teaching, required
      * @param target the mob that is being taught, required
      * @return the result, never null
      */
     public static TeachResult teach(ServerPlayer player, LivingEntity target) {
-        return teach(player, target, true);
-    }
-
-    /**
-     * The command twin of {@link #teach(ServerPlayer, LivingEntity)}: it skips
-     * <em>only</em> the two gates that exist for the item path, namely
-     * "stand inside a structure" and "look at the target".
-     *
-     * <p>{@code /structurereset learned teach-here} picks the nearest living
-     * entity itself, so the operator does not have to look at it, and an arena
-     * that the structure manager does not know is a legitimate place to teach
-     * from the command line. Everything else - the enable switch, the operator
-     * requirement and the whole boss criterion - is identical to the item
-     * path.</p>
-     *
-     * @param player the operator doing the teaching, required
-     * @param target the mob that is being taught, required
-     * @return the result, never null
-     */
-    public static TeachResult teachCommand(ServerPlayer player, LivingEntity target) {
-        return teach(player, target, false);
-    }
-
-    /**
-     * The shared teaching implementation.
-     *
-     * @param strictGates true for the item path, false for the command path
-     */
-    private static TeachResult teach(ServerPlayer player, LivingEntity target, boolean strictGates) {
         if (player == null || target == null) {
             return failure(MESSAGE_FAILED, "a teaching attempt needs a player and a target");
         }
@@ -192,13 +162,13 @@ public final class LearnedAnchorService {
         if (!target.isAlive()) {
             return failure(MESSAGE_FAILED, "the target is not alive");
         }
-        if (strictGates && StructureResetConfig.learningRequireStructure()
+        if (StructureResetConfig.learningRequireStructure()
                 && !standsInsideStructure(player, target)) {
             LOGGER.info("[{}] teaching refused: the player stands inside no structure (player={})",
                     StructureResetConfig.MOD_ID, player.getName().getString());
             return failure(MESSAGE_NO_STRUCTURE, "the player does not stand inside a structure");
         }
-        if (strictGates && !isLookingAt(player, target, StructureResetConfig.learningMaxAngleDegrees())) {
+        if (!isLookingAt(player, target, StructureResetConfig.learningMaxAngleDegrees())) {
             LOGGER.info("[{}] teaching refused: the player does not look at the target (player={})",
                     StructureResetConfig.MOD_ID, player.getName().getString());
             return failure(MESSAGE_NOT_LOOKING, "the player is not looking at the target");
@@ -206,14 +176,14 @@ public final class LearnedAnchorService {
         // The entity classification, in the documented order: a registered
         // script filter decides alone, then the allow list, the excluded
         // namespaces, the deny list, the boss entity tags, the optional boss NBT
-        // keys and finally the maximum health threshold.
-        if (strictGates) {
-            String rejection = classify(target);
-            if (rejection != null) {
-                LOGGER.info("[{}] teaching refused: {} rejected the target {}",
-                        StructureResetConfig.MOD_ID, rejection, entityIdOf(target));
-                return failure(rejection, "the target was rejected by " + rejection);
-            }
+        // keys and finally the maximum health threshold. It runs on every entry
+        // point - only the "stand inside a structure" and "look at the target"
+        // gates are specific to the item path.
+        String rejection = classify(target);
+        if (rejection != null) {
+            LOGGER.info("[{}] teaching refused: {} rejected the target {}",
+                    StructureResetConfig.MOD_ID, rejection, entityIdOf(target));
+            return failure(rejection, "the target was rejected by " + rejection);
         }
         if (!(target.level() instanceof ServerLevel level)) {
             return failure(MESSAGE_FAILED, "the target is not in a server level");
@@ -254,14 +224,17 @@ public final class LearnedAnchorService {
 
     /**
      * The administrative twin of {@link #teach(ServerPlayer, LivingEntity)},
-     * used by {@code /structurereset learned teach-here <entity_id>}.
+     * used by {@code /structurereset records teach-here <entity_id>}.
      *
-     * <p>An operator who explicitly names the boss entity takes the final
-     * decision, so this path deliberately bypasses the "stand inside a
-     * structure" gate and the whole entity classification (script filter, allow
-     * list, excluded namespaces, deny list, boss tags and health threshold).
-     * That is what makes it usable for a hand built arena or for a custom area
-     * the structure manager does not know.</p>
+     * <p>An operator who explicitly names the boss entity does not have to look
+     * at it and does not have to stand inside a structure this mod can see, so
+     * exactly those two gates are skipped. Everything else is identical to the
+     * item path: the enable switch and the whole entity classification (the
+     * script filter, the allow list, the excluded namespaces, the deny list, the
+     * boss tags, the NBT keys and the health threshold) still apply. That is
+     * what makes the command usable for a hand built arena or for a custom area
+     * the structure manager does not know, while keeping it from recording a
+     * random mob as a boss.</p>
      *
      * <p>The record itself is exactly the one the item path writes - same
      * dimension, same boss entity id, the operator's block position as the
@@ -282,13 +255,23 @@ public final class LearnedAnchorService {
             return failure(MESSAGE_DISABLED, "the learning feature is disabled in the configuration");
         }
         ResourceLocation id = entityId == null ? null : ResourceLocation.tryParse(entityId.trim());
-        if (id == null || ForgeRegistries.ENTITY_TYPES.getValue(id) == null) {
+        EntityType<?> type = id == null ? null : ForgeRegistries.ENTITY_TYPES.getValue(id);
+        if (type == null) {
             LOGGER.info("[{}] admin teaching refused: unknown entity id {}", StructureResetConfig.MOD_ID,
                     entityId);
             return failure(MESSAGE_UNKNOWN_ENTITY, "unknown entity id '" + entityId + "'");
         }
         if (!(player.level() instanceof ServerLevel level)) {
             return failure(MESSAGE_FAILED, "the player is not in a server level");
+        }
+        // Only the two positional gates are skipped here: the classification is the
+        // same one the item path runs, so "/structurereset records teach-here
+        // minecraft:cow" is refused exactly like a right click on a cow would be.
+        String rejection = classifyType(level, type);
+        if (rejection != null) {
+            LOGGER.info("[{}] admin teaching refused: {} rejected the target {}",
+                    StructureResetConfig.MOD_ID, rejection, id);
+            return failure(rejection, "the target was rejected by " + rejection);
         }
         BlockPos point = player.blockPosition();
         Recorded recorded = record(level, player, id.toString(), point);
@@ -469,33 +452,10 @@ public final class LearnedAnchorService {
      * Entries may be written with or without a leading {@code '#'}.</p>
      */
     private static boolean carriesAnyBossTag(LivingEntity target) {
-        List<String> tags = StructureResetConfig.learningBossTags();
-        if (target == null || tags == null || tags.isEmpty()) {
+        if (target == null) {
             return false;
         }
-        net.minecraft.world.entity.EntityType<?> type = target.getType();
-        for (String raw : tags) {
-            if (raw == null || raw.isBlank()) {
-                continue;
-            }
-            String clean = raw.trim();
-            if (clean.startsWith("#")) {
-                clean = clean.substring(1);
-            }
-            ResourceLocation id = ResourceLocation.tryParse(clean);
-            if (id == null) {
-                continue;
-            }
-            try {
-                if (type.is(TagKey.create(Registries.ENTITY_TYPE, id))) {
-                    return true;
-                }
-            } catch (RuntimeException ignored) {
-                // an unreadable tag simply does not match
-            LOGGER.debug("structure reset: skipped one malformed entry", ignored);
-            }
-        }
-        return false;
+        return bossTagged(target.getType());
     }
 
     /**
@@ -970,31 +930,58 @@ public final class LearnedAnchorService {
      * marker - and it must pass exactly the gate a taught entity passes.
      */
     private static boolean anchorCandidateAllowed(ServerLevel level, EntityType<?> type) {
+        return classifyType(level, type) == null;
+    }
+
+    /**
+     * The rejection {@link #classify} reports for a freshly created instance of
+     * {@code type}, or null when the type would be accepted.
+     *
+     * <p>Needed by the two entry points that only have an entity type at hand -
+     * the administrative {@link #teachEntity(ServerPlayer, String)} command and
+     * the "anchor block entity names this entity" candidate of the structure
+     * scan. A temporary instance is created and discarded again because the
+     * classification reads the type's tags, its NBT and its maximum health, and
+     * because an item, a projectile or a marker is never a boss: those have the
+     * {@code MISC} category, which vanilla does not hand out over the boss
+     * gates of this mod.</p>
+     */
+    private static String classifyType(ServerLevel level, EntityType<?> type) {
         if (type == null || type.getCategory() == MobCategory.MISC) {
-            return false;
+            return MESSAGE_TOO_WEAK;
         }
         Entity created = type.create(level);
         if (!(created instanceof LivingEntity living)) {
             if (created != null) {
                 created.discard();
             }
-            return false;
+            return MESSAGE_TOO_WEAK;
         }
-        boolean allowed = isBossCandidate(living);
+        String rejection = classify(living);
         living.discard();
-        return allowed;
+        return rejection;
     }
 
-    /** True when the entity type is a member of one of the configured boss tags. */
+    /**
+     * True when the entity type is a member of one of the configured boss tags.
+     *
+     * <p>The single implementation of the tag test: both the live entity path
+     * ({@link #carriesAnyBossTag(LivingEntity)}) and the "only a type is known"
+     * path of the structure scan ask the question here.</p>
+     */
     private static boolean bossTagged(EntityType<?> type) {
         if (type == null) {
             return false;
         }
-        for (String raw : StructureResetConfig.learningBossTags()) {
+        List<String> tags = StructureResetConfig.learningBossTags();
+        if (tags == null || tags.isEmpty()) {
+            return false;
+        }
+        for (String raw : tags) {
             if (raw == null || raw.isBlank()) {
                 continue;
             }
-            String text = raw.startsWith("#") ? raw.substring(1) : raw;
+            String text = raw.trim().startsWith("#") ? raw.trim().substring(1) : raw.trim();
             ResourceLocation id = ResourceLocation.tryParse(text);
             if (id == null) {
                 continue;

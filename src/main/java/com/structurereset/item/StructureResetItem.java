@@ -4,14 +4,12 @@ import com.structurereset.StructureResetMod;
 import com.structurereset.api.ResetDefinition;
 import com.structurereset.client.StructureResetClient;
 import com.structurereset.core.ItemSettingsRegistry;
-import com.structurereset.core.ResetResult;
 import com.structurereset.core.StructureResetApi;
 import com.structurereset.config.StructureResetConfig;
 import com.structurereset.impl.BossBindingService;
 import com.structurereset.impl.LearnedAnchorService;
 import com.structurereset.impl.ResetActivation;
 import com.structurereset.impl.ResetAim;
-import com.structurereset.impl.ResetConfirmation;
 import com.structurereset.impl.ResetEngine;
 import com.structurereset.impl.ResetPrompt;
 import java.util.List;
@@ -43,13 +41,13 @@ import org.jetbrains.annotations.Nullable;
  *
  * <p>Using the item asks {@link StructureResetApi} which reset definition
  * applies to the block the player stands in. The reset itself takes two right
- * clicks: the first one executes nothing at all and only announces what would
- * happen ({@link ResetPrompt}) and opens the activation window
- * ({@code confirmWindowSeconds}, three seconds by default) during which the
- * item shows its active model; the second one inside that window runs the
- * reset, puts the item on cooldown, tells the player what happened and plays a
- * chime. A refused attempt only explains why: it neither runs a reset nor
- * consumes anything.</p>
+ * clicks: the first one executes nothing at all, announces what a confirming
+ * click would do ({@link ResetPrompt}) and opens the aiming window
+ * ({@code aimWindowTicks}, thirty seconds by default) during which the item
+ * shows its active model; the second one locks the aimed spot and starts the
+ * cast, and the reset runs when that cast is over ({@code aimCastTicks}). A
+ * refused attempt only explains why: it neither runs a reset nor consumes
+ * anything.</p>
  *
  * <p>One successful reset costs one durability point, so a freshly crafted core
  * pays for {@link #MAX_USES} resets and then breaks. The item property declares
@@ -81,18 +79,20 @@ public class StructureResetItem extends Item {
     /**
      * How many successful resets one core can pay for.
      *
-     * <p>The {@link Item.Properties} below spell the same value out as
-     * {@code durability(5)}; this constant is the public mirror scripts and
-     * addons can read.</p>
+     * <p>This is the single shipped source of that number:
+     * {@link com.structurereset.api.ItemSettings#DEFAULT_MAX_USES} is what the
+     * {@link Item.Properties} below and the default item settings are built
+     * from, and this constant is the public mirror scripts and addons read.</p>
      */
-    public static final int MAX_USES = 5;
+    public static final int MAX_USES = com.structurereset.api.ItemSettings.DEFAULT_MAX_USES;
 
     /** Upper bound (ticks) for the cooldown taken from a definition. */
     public static final int MAX_COOLDOWN_TICKS = 20 * 60;
 
     /** The item property set every instance uses: one per stack, five resets per core. */
     public StructureResetItem() {
-        this(new Item.Properties().stacksTo(1).durability(5));
+        this(new Item.Properties().stacksTo(1)
+                .durability(com.structurereset.api.ItemSettings.DEFAULT_MAX_USES));
     }
 
     /**
@@ -220,33 +220,21 @@ public class StructureResetItem extends Item {
         // Every refusal is decided above this line, so a structure that cannot be
         // reset right now never prints the prompt at all - least of all the "right
         // click again to lock and cast" line for a click that was going to fail.
-        ResetPrompt.send(serverPlayer, serverLevel, pos, lookup);
         if (!ResetAim.beginAiming(serverPlayer, serverLevel, definition.id())) {
-            // the crosshair hit nothing usable: nothing was armed, nothing consumed
+            // the crosshair hit nothing usable: nothing was armed, nothing consumed,
+            // and no prompt is printed either - beginAiming already explained why
+            // there is no window to confirm.
             return InteractionResultHolder.sidedSuccess(stack, level.isClientSide());
         }
+        // The announcement (and the window it describes) is only sent once aiming
+        // really started, so it can never promise a second click that has nothing
+        // to confirm.
+        ResetPrompt.send(serverPlayer, serverLevel, pos, lookup);
         ResetActivation.activate(serverPlayer, serverLevel, definition.id(), stack);
         serverPlayer.displayClientMessage(Component.translatable(ResetAim.MESSAGE_AIMING), true);
         return InteractionResultHolder.sidedSuccess(stack, level.isClientSide());
     }
 
-    /**
-     * Teaching entry point: sneaking and using the core on a living entity
-     * records a learned anchor through {@link LearnedAnchorService}.
-     *
-     * <p>Without sneaking nothing happens here at all, so the ordinary "use on
-     * a mob" interactions of the target keep working.  The client only predicts
-     * the swing animation, and the outcome is decided on the server: a refused
-     * teaching reports {@code result.messageKey()} in red and plays the failure
-     * sound, a recorded one reports {@code result.message()} and plays the
-     * familiar amethyst chime.</p>
-     *
-     * <p>The item path is the strict one: the player has to stand inside a
-     * recognised structure and to actually look at the target. The command twin
-     * ({@code /structurereset learned teach-here}) skips exactly those two
-     * gates through
-     * {@link LearnedAnchorService#teachCommand(net.minecraft.server.level.ServerPlayer, net.minecraft.world.entity.LivingEntity)}.</p>
-     */
     /**
      * Sneaking and using the core on a block scans the structure the player
      * stands in for its boss, without aiming at anything.
@@ -324,21 +312,44 @@ public class StructureResetItem extends Item {
     }
 
     /**
-     * The vanilla item cooldown a reset triggered by this core applies.
+     * The vanilla item cooldown a reset triggered by {@code stack} applies.
      *
      * <p>Exposed so the crosshair driven respawn applies exactly the cooldown
-     * the plain click path applies: the item setting wins, and the definition's
-     * own cooldown is the fallback.</p>
+     * the plain click path applies: the item settings of the triggering stack
+     * win, and the definition's own cooldown is the fallback. The stack is
+     * handed in by the caller instead of being assumed to be this mod's core,
+     * because {@link ItemSettingsRegistry} can point any registered item at its
+     * own settings.</p>
      *
+     * @param stack the stack that triggered the reset, may be null or empty
      * @param definition the definition that was reset, may be null
      * @return the cooldown in ticks
      */
-    public static int cooldownTicksFor(ResetDefinition definition) {
-        return cooldownTicks(ItemSettingsRegistry.get(
-                com.structurereset.registry.ModItems.STRUCTURE_RESET_CORE.get()).cooldownSeconds(),
-                definition);
+    public static int cooldownTicksFor(ItemStack stack, ResetDefinition definition) {
+        Item triggering = stack == null || stack.isEmpty()
+                ? com.structurereset.registry.ModItems.STRUCTURE_RESET_CORE.get()
+                : stack.getItem();
+        return cooldownTicks(ItemSettingsRegistry.get(triggering).cooldownSeconds(), definition);
     }
 
+    /**
+     * Teaching entry point: sneaking and using the core on a living entity
+     * records a learned anchor through {@link LearnedAnchorService}.
+     *
+     * <p>Without sneaking nothing happens here at all, so the ordinary "use on
+     * a mob" interactions of the target keep working. The client only predicts
+     * the swing animation, and the outcome is decided on the server: a refused
+     * teaching reports {@code result.messageKey()} in red and plays the failure
+     * sound, a recorded one reports {@code result.message()} and plays the
+     * familiar amethyst chime.</p>
+     *
+     * <p>The item path is the strict one: the player has to stand inside a
+     * recognised structure and to actually look at the target. The command twin
+     * ({@code /structurereset records teach-here <entity>}) skips exactly those
+     * two positional gates through
+     * {@link LearnedAnchorService#teachEntity(net.minecraft.server.level.ServerPlayer, String)}
+     * and applies the very same entity classification.</p>
+     */
     @Override
     public InteractionResult interactLivingEntity(ItemStack stack, Player player, LivingEntity target,
                                                   InteractionHand hand) {
@@ -424,10 +435,11 @@ public class StructureResetItem extends Item {
      *
      * @param overrideSeconds the item setting: a positive value replaces the
      *        definition's own cooldown, anything else keeps it
-     * @param definition the definition that was just reset
+     * @param definition the definition that was just reset, may be null
      */
     private static int cooldownTicks(int overrideSeconds, ResetDefinition definition) {
-        int seconds = overrideSeconds > 0 ? overrideSeconds : definition.cooldownSeconds();
+        int definitionSeconds = definition == null ? 0 : definition.cooldownSeconds();
+        int seconds = overrideSeconds > 0 ? overrideSeconds : definitionSeconds;
         if (seconds <= 0) {
             return DEFAULT_COOLDOWN_TICKS;
         }

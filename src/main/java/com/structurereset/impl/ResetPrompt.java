@@ -30,8 +30,11 @@ import net.minecraft.world.phys.AABB;
  * <p>The first right click on the structure reset core executes nothing at all:
  * no reset, no durability damage, no cooldown and no item consumption. It only
  * calls {@link #send(ServerPlayer, ServerLevel, BlockPos, ResetEngine.DefinitionLookup)},
- * which describes what a confirming click would do and arms the player for the
- * configured window. Nothing in this class ever runs the reset flow.</p>
+ * which describes what a confirming click would do. The window that click can
+ * confirm is the aiming window opened by
+ * {@link ResetAim#beginAiming(ServerPlayer, ServerLevel, String)}; this class
+ * neither arms nor cancels anything itself. Nothing in this class ever runs the
+ * reset flow.</p>
  *
  * <p>Every line is a translation key so the same prompt works in every
  * language; the lines are joined with {@code "\n"} into a single component and
@@ -80,15 +83,16 @@ public final class ResetPrompt {
     }
 
     /**
-     * Announces what a confirming click would do and arms the player when the
-     * reset is allowed right now.
+     * Announces what a confirming click would do.
      *
-     * <p>The player is only armed when
+     * <p>The caller only reaches this method once
+     * {@link ResetAim#beginAiming(ServerPlayer, ServerLevel, String)} really
+     * started the aiming window, so the announcement can never describe a window
+     * that does not exist. When
      * {@link StructureResetApi#canReset(ServerLevel, BlockPos, ServerPlayer, String, boolean)}
-     * says the reset would run; otherwise the existing "not ready" line is
+     * says the reset would not run right now, the existing "not ready" line is
      * appended instead. A refusal reason reported by the lookup (the ambiguous
-     * anchor case) is appended as one more line, and it never arms either
-     * because there is no definition to arm for.</p>
+     * anchor case) is appended as one more line.</p>
      */
     public static void send(ServerPlayer player, ServerLevel level, BlockPos pos,
                             ResetEngine.DefinitionLookup lookup) {
@@ -106,12 +110,13 @@ public final class ResetPrompt {
         lines.add(chests > 0
                 ? Component.translatable(KEY_CHESTS, chests).withStyle(ChatFormatting.GRAY)
                 : Component.translatable(KEY_CHESTS_NONE).withStyle(ChatFormatting.GRAY));
-        lines.add(Component.translatable(KEY_PROMPT, StructureResetConfig.confirmWindowSeconds())
+        // The number is the real length of the aiming window the second click has
+        // to confirm: it is driven by aimWindowTicks, not by the legacy
+        // confirmation window this class used to arm before aiming even started.
+        lines.add(Component.translatable(KEY_PROMPT, StructureResetConfig.aimWindowTicks() / 20)
                 .withStyle(ChatFormatting.GOLD));
         if (definition != null
-                && StructureResetApi.canReset(level, pos, player, definition.id(), false)) {
-            ResetConfirmation.arm(player, level, definition.id());
-        } else if (definition != null) {
+                && !StructureResetApi.canReset(level, pos, player, definition.id(), false)) {
             lines.add(Component.translatable(KEY_NOT_READY).withStyle(ChatFormatting.RED));
         }
         if (lookup != null && lookup.messageKey() != null && !lookup.messageKey().isBlank()) {

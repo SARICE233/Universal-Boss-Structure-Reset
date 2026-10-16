@@ -1,5 +1,4 @@
 {
-  "itemGroup.structurereset": "Structure Reset",
   "item.structurereset.structure_reset_core": "Structure Reset Core",
   "item.structurereset.structure_reset_core.tooltip": "Right click: aim the respawn spot (right click again to cast)\nSneak + right click: teach / scan the structure\nLeft click: capture loot tables",
   "item.structurereset.structure_reset_core.ready": "Status: ready",

@@ -27,7 +27,6 @@ import argparse
 import json
 import shutil
 import sys
-import tempfile
 import zipfile
 from pathlib import Path
 
@@ -39,6 +38,9 @@ except Exception:  # pragma: no cover
 
 SCRIPT = Path(__file__).resolve()
 WORKSPACE = SCRIPT.parent.parent
+
+sys.path.insert(0, str(SCRIPT.parent))
+import toolchain  # noqa: E402  (sibling module: shared scratch directories)
 
 # Secondary Gradle artefacts that must never be mistaken for the mod jar.
 # "-dev.jar" is deliberately *not* listed: build/dist/<modid>-<version>-dev.jar
@@ -500,7 +502,7 @@ def validate_jar(workspace: Path) -> int:
               % (workspace / "build" / "dist", workspace / "build" / "libs"))
         return 1
     print("jar: checking %s" % jar)
-    tmp = Path(tempfile.mkdtemp(prefix="structurereset-jar-"))
+    tmp = toolchain.make_scratch_dir("structurereset-jar", workspace)
     try:
         try:
             with zipfile.ZipFile(jar) as archive:
@@ -687,7 +689,7 @@ DEFECTS = (
 
 
 def selftest() -> int:
-    tmp = Path(tempfile.mkdtemp(prefix="structurereset-validate-selftest-"))
+    tmp = toolchain.make_scratch_dir("structurereset-validate-selftest", WORKSPACE)
     ok = True
     try:
         clean = tmp / "clean"

@@ -244,7 +244,8 @@ public final class ResetAim {
         store(player, level, PHASE_CASTING, target.get(), definitionId,
                 level.getGameTime() + CastEffect.castTicks());
         CastEffect.begin(player, level, target.get());
-        CastBar.start(player, CastEffect.styleOf(level), bringsBoss(level, player, definitionId));
+        CastBar.start(player, CastEffect.styleOf(level),
+                bringsBoss(level, target.get(), player, definitionId));
         return true;
     }
 
@@ -386,10 +387,16 @@ public final class ResetAim {
         // Only a usable aim takes over. A crosshair pointing nowhere usable must
         // never destroy the position the mod recommended a moment ago - that
         // recommendation exists precisely because the crosshair was unusable.
-        if (crosshair.isPresent() && statusAt(level, crosshair.get(), definitionId) != STATUS_ILLEGAL) {
-            store(player, level, PHASE_AIMING, crosshair.get(), definitionId, until);
-            outline(level, crosshair.get(), statusAt(level, crosshair.get(), definitionId));
-            return;
+        if (crosshair.isPresent()) {
+            // One status per tick and position: statusAt() walks the structure
+            // manager and the boss registry, so asking it twice in the same tick
+            // for the same spot is repeated work for no gain.
+            int status = statusAt(level, crosshair.get(), definitionId);
+            if (status != STATUS_ILLEGAL) {
+                store(player, level, PHASE_AIMING, crosshair.get(), definitionId, until);
+                outline(level, crosshair.get(), status);
+                return;
+            }
         }
         aimedAt(player).ifPresent(current ->
                 outline(level, current, statusAt(level, current, definitionId)));
@@ -420,22 +427,20 @@ public final class ResetAim {
     }
 
     /**
-     * Runs the reset at the locked position and updates the registry.
-     *
-     * <p>The aim position is used both as the reset origin and, through
-     * {@link #spawnOverride}, as the spawn point of the boss.</p>
-     */
-    /**
      * True when the definition that is being played brings a boss back.
      *
      * <p>It decides the wording of the cast bar and of the finished message: a
      * structure without a boss refills loot only, so saying "summoning" there would
-     * be wrong.</p>
+     * be wrong. The lookup uses the position the cast is locked to, never the
+     * position the player happens to stand in: a player who walks out of the
+     * structure during the cast would otherwise turn a real boss summon into the
+     * "loot only" wording.</p>
      */
-    private static boolean bringsBoss(ServerLevel level, ServerPlayer player, String definitionId) {
+    private static boolean bringsBoss(ServerLevel level, BlockPos pos, ServerPlayer player,
+                                      String definitionId) {
         try {
             com.structurereset.api.ResetDefinition definition = StructureResetApi
-                    .lookupDefinitionAt(level, player.blockPosition(), player).definition();
+                    .lookupDefinitionAt(level, pos, player).definition();
             return definition != null && definition.respawnBossEntity() != null
                     && !definition.respawnBossEntity().isBlank();
         } catch (RuntimeException failure) {
@@ -444,12 +449,22 @@ public final class ResetAim {
         }
     }
 
+    /**
+     * Runs the reset at the locked position and updates the registry.
+     *
+     * <p>The aim position is used both as the reset origin and, through
+     * {@link #spawnOverride}, as the spawn point of the boss.</p>
+     */
     private static void finish(ServerPlayer player, ServerLevel level, BlockPos target) {
         CastEffect.finish(player, level, target);
         String definitionId = player.getPersistentData().getString(TAG_DEFINITION);
         String resolved = definitionId == null || definitionId.isEmpty() ? null : definitionId;
+        // The item settings that count are the ones of the stack that really started
+        // this cast - not the shipped core defaults, which is what an addon item with
+        // its own ItemSettings would otherwise silently get.
+        net.minecraft.world.item.ItemStack triggering = triggeringCore(player);
         int cooldownSeconds = com.structurereset.item.StructureResetItem.cooldownTicksFor(
-                ResetEngine.resolveDefinition(level, target, player, resolved)) / 20;
+                triggering, ResetEngine.resolveDefinition(level, target, player, resolved)) / 20;
         ResetResult result = StructureResetApi.triggerReset(level, target, player,
                 resolved, false, ResetResult.MESSAGE_OK, cooldownSeconds);
         Set<String> structureIds = ResetEngine.structureIdsAt(level, target);
@@ -460,22 +475,40 @@ public final class ResetAim {
                 StructureResetMod.MODID, target, result.success(), structureIds);
         if (result.success()) {
             player.displayClientMessage(Component.translatable(
-                    bringsBoss(level, player, definitionId) ? MESSAGE_CAST_DONE : MESSAGE_CAST_DONE_LOOT), true);
+                    bringsBoss(level, target, player, definitionId) ? MESSAGE_CAST_DONE
+                            : MESSAGE_CAST_DONE_LOOT), true);
         } else {
             player.displayClientMessage(
                     Component.translatable(result.messageKey()).withStyle(
                             net.minecraft.ChatFormatting.RED), true);
         }
-        if (result.success()) {
-            net.minecraft.world.item.ItemStack held = player.getMainHandItem();
-            if (held.is(com.structurereset.registry.ModItems.STRUCTURE_RESET_CORE.get())) {
-                player.getCooldowns().addCooldown(held.getItem(),
-                        com.structurereset.item.StructureResetItem.cooldownTicksFor(
-                                ResetEngine.resolveDefinition(level, target, player, resolved)));
-                ResetActivation.clearActive(held);
-            }
+        if (result.success() && !triggering.isEmpty()) {
+            player.getCooldowns().addCooldown(triggering.getItem(),
+                    com.structurereset.item.StructureResetItem.cooldownTicksFor(triggering,
+                            ResetEngine.resolveDefinition(level, target, player, resolved)));
+            ResetActivation.clearActive(triggering);
         }
         clear(player);
+    }
+
+    /**
+     * The reset core the player is holding, main hand first and off hand second.
+     *
+     * <p>Used for the cooldown the finished cast applies: the item that started
+     * the cast is the one whose {@link com.structurereset.core.ItemSettingsRegistry}
+     * entry decides the cooldown.</p>
+     *
+     * @param player the casting player, never null here
+     * @return the held core, or an empty stack when the player holds none
+     */
+    private static net.minecraft.world.item.ItemStack triggeringCore(ServerPlayer player) {
+        net.minecraft.world.item.ItemStack main = player.getMainHandItem();
+        if (main.is(com.structurereset.registry.ModItems.STRUCTURE_RESET_CORE.get())) {
+            return main;
+        }
+        net.minecraft.world.item.ItemStack off = player.getOffhandItem();
+        return off.is(com.structurereset.registry.ModItems.STRUCTURE_RESET_CORE.get())
+                ? off : net.minecraft.world.item.ItemStack.EMPTY;
     }
 
     // ------------------------------------------------------------- cleanup

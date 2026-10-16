@@ -2,8 +2,6 @@ package com.structurereset.core;
 
 import com.structurereset.api.ItemSettings;
 import com.structurereset.config.StructureResetConfig;
-import java.util.Collections;
-import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import net.minecraft.world.item.Item;
@@ -89,12 +87,4 @@ public final class ItemSettingsRegistry {
         return settings == null ? defaults() : settings;
     }
 
-    /**
-     * An immutable, ordered snapshot of every explicit override.
-     *
-     * @return item to settings, in insertion order
-     */
-    public static Map<Item, ItemSettings> all() {
-        return Collections.unmodifiableMap(new LinkedHashMap<>(SETTINGS));
-    }
 }

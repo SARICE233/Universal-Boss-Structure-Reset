@@ -30,8 +30,10 @@ import net.minecraft.world.phys.AABB;
  * <p>Parameters: {@code mode} ({@code empty_only}, the default, or {@code all}),
  * {@code loot_tables} (an optional array of loot table ids to restrict the
  * refill to) and {@code reroll_seed} (default true). Only containers that
- * already carry a loot table are touched, so a chest a player filled by hand is
- * never emptied by this action.</p>
+ * already carry a loot table are touched, a container is never cleared, and a
+ * container that already holds items is left alone by vanilla's
+ * {@code unpackLootTable}, so a chest a player filled by hand is neither
+ * emptied nor topped up by this action.</p>
  */
 public final class RefillLootAction implements ResetActionType {
 
@@ -78,12 +80,18 @@ public final class RefillLootAction implements ResetActionType {
                     if (!(blockEntity instanceof RandomizableContainerBlockEntity container)) {
                         continue;
                     }
-                    if (emptyOnly && !container.isEmpty()) {
-                        continue;
-                    }
                     // the loot table accessors of RandomizableContainerBlockEntity are
                     // protected, so the public block entity NBT is read instead
                     CompoundTag saved = container.saveWithoutMetadata();
+                    // The emptiness test must never call
+                    // RandomizableContainerBlockEntity#isEmpty(): in 1.20.1 that method
+                    // unpacks the loot table first, which fills the container and drops
+                    // the table - i.e. the test would open the very chest it only wants
+                    // to look at. The stored item list is inspected instead, exactly
+                    // like previewCount() does.
+                    if (emptyOnly && !storedEmpty(saved)) {
+                        continue;
+                    }
                     ResourceLocation table;
                     long storedSeed;
                     boolean hasSeed;
@@ -91,7 +99,10 @@ public final class RefillLootAction implements ResetActionType {
                         table = ResourceLocation.tryParse(
                                 saved.getString(RandomizableContainerBlockEntity.LOOT_TABLE_TAG));
                         storedSeed = saved.getLong(RandomizableContainerBlockEntity.LOOT_TABLE_SEED_TAG);
-                        hasSeed = true;
+                        // A seed only counts when it is really stored and not the
+                        // "no seed" zero, the same rule readContainer() uses.
+                        hasSeed = saved.contains(RandomizableContainerBlockEntity.LOOT_TABLE_SEED_TAG)
+                                && storedSeed != 0L;
                     } else {
                         // The container was opened already, so its own loot table is gone
                         // from the world. A left click capture taken before that happened
@@ -111,7 +122,9 @@ public final class RefillLootAction implements ResetActionType {
                         continue;
                     }
                     long seed = rerollSeed || !hasSeed ? level.getRandom().nextLong() : storedSeed;
-                    container.clearContent();
+                    // The container is never cleared: vanilla only fills the slots that
+                    // are still empty, so whatever a player put in by hand survives the
+                    // refill.
                     container.setLootTable(table, seed);
                     container.unpackLootTable(null);
                     container.setChanged();

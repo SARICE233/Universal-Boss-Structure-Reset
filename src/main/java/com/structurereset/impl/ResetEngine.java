@@ -36,7 +36,9 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.StructureManager;
 import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.levelgen.structure.BoundingBox;
 import net.minecraft.world.level.levelgen.structure.Structure;
@@ -138,7 +140,7 @@ public final class ResetEngine {
                 rest.add(definition);
             }
         }
-        LOGGER.info("[{}] selection input: structureIds={} tags={} anchorEntityType={} anchorRadius={} anchored={} rest={}",
+        LOGGER.debug("[{}] selection input: structureIds={} tags={} anchorEntityType={} anchorRadius={} anchored={} rest={}",
                 StructureResetConfig.MOD_ID, facts.ids(), facts.tags(), facts.anchorEntityType(),
                 ANCHOR_SCAN_RADIUS, anchored.size(), rest.size());
         Optional<ResetDefinition> selected = selectDefinition(anchored, facts, true);
@@ -146,19 +148,19 @@ public final class ResetEngine {
             selected = selectDefinition(rest, facts, false);
         }
         if (selected.isPresent()) {
-            LOGGER.info("[{}] selection result: chosen={} respawn={} structureIds={} anchorEntityType={}",
+            LOGGER.debug("[{}] selection result: chosen={} respawn={} structureIds={} anchorEntityType={}",
                     StructureResetConfig.MOD_ID, selected.get().id(), selected.get().respawnBossEntity(),
                     facts.ids(), facts.anchorEntityType());
             return new DefinitionLookup(selected.get(), null);
         }
         Optional<ResetDefinition> learned = LearnedAnchorService.learnedDefinition(level, pos);
         if (learned.isPresent()) {
-            LOGGER.info("[{}] selection result: learned={} structureIds={} anchorEntityType={}",
+            LOGGER.debug("[{}] selection result: learned={} structureIds={} anchorEntityType={}",
                     StructureResetConfig.MOD_ID, learned.get().id(), facts.ids(),
                     facts.anchorEntityType());
             return new DefinitionLookup(learned.get(), null);
         }
-        LOGGER.info("[{}] selection result: REFUSED anchorNearby={} structureIds={} anchorEntityType={}",
+        LOGGER.debug("[{}] selection result: REFUSED anchorNearby={} structureIds={} anchorEntityType={}",
                 StructureResetConfig.MOD_ID, anchorNearby, facts.ids(), facts.anchorEntityType());
         return new DefinitionLookup(null, anchorNearby ? MESSAGE_AMBIGUOUS : null);
     }
@@ -541,33 +543,46 @@ public final class ResetEngine {
      * @param core the resolved item that is this mod's core
      */
     private static void damageCore(ServerPlayer actor, Item core) {
-        ItemStack stack = coreStack(actor, core);
+        Carried carried = coreStack(actor, core);
+        ItemStack stack = carried.stack();
         if (stack.isEmpty() || !stack.isDamageableItem() || stack.getMaxDamage() <= 0) {
             return;
         }
         if (isUnbreakable(stack)) {
             return;
         }
-        stack.hurtAndBreak(1, actor, broken -> broken.broadcastBreakEvent(EquipmentSlot.MAINHAND));
+        // The break event names the slot the core really sits in: a durability or
+        // enchantment listener that reacts to "MAINHAND" would otherwise be told
+        // about a slot the core is not in.
+        stack.hurtAndBreak(1, actor, broken -> broken.broadcastBreakEvent(carried.slot()));
     }
 
-    /** Main hand first, then off hand, then the first inventory slot holding a core. */
-    private static ItemStack coreStack(ServerPlayer actor, Item core) {
+    /** One carried core and the equipment slot it is read from. */
+    private record Carried(ItemStack stack, EquipmentSlot slot) {
+    }
+
+    /**
+     * Main hand first, then off hand, then the first inventory slot holding a core.
+     *
+     * <p>An inventory stack is not equipped anywhere, so its break event keeps the
+     * main hand slot, which is what the code reported before.</p>
+     */
+    private static Carried coreStack(ServerPlayer actor, Item core) {
         ItemStack main = actor.getMainHandItem();
         if (!main.isEmpty() && main.is(core)) {
-            return main;
+            return new Carried(main, EquipmentSlot.MAINHAND);
         }
         ItemStack off = actor.getOffhandItem();
         if (!off.isEmpty() && off.is(core)) {
-            return off;
+            return new Carried(off, EquipmentSlot.OFFHAND);
         }
         for (int slot = 0; slot < actor.getInventory().getContainerSize(); slot++) {
             ItemStack stack = actor.getInventory().getItem(slot);
             if (!stack.isEmpty() && stack.is(core)) {
-                return stack;
+                return new Carried(stack, EquipmentSlot.MAINHAND);
             }
         }
-        return ItemStack.EMPTY;
+        return new Carried(ItemStack.EMPTY, EquipmentSlot.MAINHAND);
     }
 
     /**
@@ -959,24 +974,141 @@ public final class ResetEngine {
                         .forEach(tag -> tags.add(tag.location().toString())));
     }
 
-    /** The block ids present in a cube around {@code origin}. */
+    /**
+     * The ids of the <em>declared</em> anchor blocks that are present in a cube
+     * around {@code origin}.
+     *
+     * <p>Walking every block of a 33x33x33 cube and resolving each one through
+     * the block registry was the most expensive part of a lookup, and a lookup
+     * runs on every right click, on every fallback resolution and on every entity
+     * bind. Two things make it cheap now. First, only the anchor blocks some
+     * registered definition declares are searched for, and they are resolved once
+     * into {@link Block} instances, so one position costs a palette read and one
+     * identity lookup. A pack whose definitions declare no anchor block walks
+     * nothing at all, because there is nothing to find.</p>
+     *
+     * <p>Second, the loaded block entities of the chunks around the origin are
+     * inspected first - the same inspection
+     * {@link #anchorEntityTypeAt(ServerLevel, BlockPos)} does, and the pass that
+     * finds every shipped anchor, because Cataclysm's {@code boss_respawner} and
+     * the altar/tombstone family are block entities. Only when that pass finds
+     * nothing is the cube walked for the declared blocks, and then only over
+     * already loaded chunks via {@code getChunkNow}: no chunk is ever loaded, and
+     * no block outside the cube is read.</p>
+     */
     private static Set<String> nearbyBlockIds(ServerLevel level, BlockPos origin, int radius) {
         Set<String> ids = new LinkedHashSet<>();
         if (radius <= 0) {
             return ids;
         }
-        for (BlockPos pos : BlockPos.betweenClosed(origin.offset(-radius, -radius, -radius),
-                origin.offset(radius, radius, radius))) {
-            if (!level.isLoaded(pos)) {
-                continue;
+        Set<Block> wanted = declaredAnchorBlocks();
+        if (wanted.isEmpty()) {
+            return ids;
+        }
+        int minChunkX = (origin.getX() - radius) >> 4;
+        int maxChunkX = (origin.getX() + radius) >> 4;
+        int minChunkZ = (origin.getZ() - radius) >> 4;
+        int maxChunkZ = (origin.getZ() + radius) >> 4;
+        for (int chunkX = minChunkX; chunkX <= maxChunkX; chunkX++) {
+            for (int chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ++) {
+                LevelChunk chunk = level.getChunkSource().getChunkNow(chunkX, chunkZ);
+                if (chunk == null) {
+                    continue;
+                }
+                for (BlockEntity blockEntity : chunk.getBlockEntities().values()) {
+                    BlockPos pos = blockEntity.getBlockPos();
+                    if (!withinCube(origin, pos, radius)) {
+                        continue;
+                    }
+                    Block block = blockEntity.getBlockState().getBlock();
+                    if (wanted.contains(block)) {
+                        addBlockId(ids, block);
+                    }
+                }
             }
-            Block block = level.getBlockState(pos).getBlock();
-            ResourceLocation id = BuiltInRegistries.BLOCK.getKey(block);
-            if (id != null) {
-                ids.add(id.toString());
+        }
+        if (!ids.isEmpty()) {
+            return ids;
+        }
+        // A declared anchor block that carries no block entity (the documented
+        // lodestone case) is invisible to the pass above, so the cube is walked for
+        // the declared blocks only.
+        int minY = Math.max(level.getMinBuildHeight(), origin.getY() - radius);
+        int maxY = Math.min(level.getMaxBuildHeight() - 1, origin.getY() + radius);
+        for (int chunkX = minChunkX; chunkX <= maxChunkX; chunkX++) {
+            for (int chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ++) {
+                LevelChunk chunk = level.getChunkSource().getChunkNow(chunkX, chunkZ);
+                if (chunk == null) {
+                    continue;
+                }
+                int startX = Math.max(origin.getX() - radius, chunkX << 4);
+                int endX = Math.min(origin.getX() + radius, (chunkX << 4) + 15);
+                int startZ = Math.max(origin.getZ() - radius, chunkZ << 4);
+                int endZ = Math.min(origin.getZ() + radius, (chunkZ << 4) + 15);
+                for (int x = startX; x <= endX; x++) {
+                    for (int z = startZ; z <= endZ; z++) {
+                        for (int y = minY; y <= maxY; y++) {
+                            BlockState state = chunk.getBlockState(new BlockPos(x, y, z));
+                            if (wanted.contains(state.getBlock())) {
+                                addBlockId(ids, state.getBlock());
+                            }
+                        }
+                    }
+                }
             }
         }
         return ids;
+    }
+
+    /** True when {@code pos} lies inside the cube of {@code radius} around {@code origin}. */
+    private static boolean withinCube(BlockPos origin, BlockPos pos, int radius) {
+        return Math.abs(pos.getX() - origin.getX()) <= radius
+                && Math.abs(pos.getY() - origin.getY()) <= radius
+                && Math.abs(pos.getZ() - origin.getZ()) <= radius;
+    }
+
+    /** Adds the registry id of one matched block, resolving it only for a hit. */
+    private static void addBlockId(Set<String> ids, Block block) {
+        ResourceLocation id = BuiltInRegistries.BLOCK.getKey(block);
+        if (id != null) {
+            ids.add(id.toString());
+        }
+    }
+
+    /**
+     * Every declared anchor block, resolved once into a {@link Block}.
+     *
+     * <p>The same namespace rule the rest of the class uses applies: an anchor id
+     * without a namespace also names the {@code minecraft:} one. An id that
+     * resolves to air (an unknown block) is dropped, so a typo in a data pack can
+     * never make every position look "anchored".</p>
+     */
+    private static Set<Block> declaredAnchorBlocks() {
+        Set<Block> blocks = new LinkedHashSet<>();
+        for (String anchor : declaredAnchorBlockIds()) {
+            if (anchor == null || anchor.isBlank()) {
+                continue;
+            }
+            String trimmed = anchor.trim();
+            ResourceLocation id = anchorBlockId(trimmed);
+            if (id == null) {
+                continue;
+            }
+            Block block = BuiltInRegistries.BLOCK.get(id);
+            if (block != null && block != Blocks.AIR) {
+                blocks.add(block);
+            }
+        }
+        return blocks;
+    }
+
+    /** The registry id of one anchor entry, applying the "no namespace means minecraft:" rule. */
+    private static ResourceLocation anchorBlockId(String anchor) {
+        ResourceLocation id = ResourceLocation.tryParse(anchor);
+        if (id == null && !anchor.contains(":")) {
+            return ResourceLocation.tryParse("minecraft:" + anchor);
+        }
+        return id;
     }
 
     private static boolean anchorPresent(ResetDefinition definition, Set<String> nearbyBlockIds) {

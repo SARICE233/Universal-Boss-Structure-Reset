@@ -1,35 +1,35 @@
 package com.structurereset.impl;
 
-import com.structurereset.api.CooldownPolicy;
-import com.structurereset.config.StructureResetConfig;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraftforge.event.entity.living.LivingDeathEvent;
 import net.minecraftforge.event.entity.player.PlayerEvent;
-import org.jetbrains.annotations.Nullable;
 
 /**
- * The per player state machine of the two click confirmation of the structure
- * reset core.
+ * The per player timestamp store of the aiming window of the structure reset
+ * core.
  *
- * <p>The first right click never resets anything: it only announces what would
- * happen and arms the player here. A second right click inside
- * {@link StructureResetConfig#confirmWindowSeconds()} runs the ordinary reset
- * flow; a later one is treated as a brand new first click.</p>
+ * <p>The two click interaction itself is driven by {@link ResetAim}: a first
+ * right click opens the aiming window, a second one locks the spot and starts
+ * the cast. This class only remembers <em>when</em> that window was opened
+ * (together with the dimension and the definition it belongs to), so
+ * {@link ResetActivation} can show a countdown and {@link ResetAim} can tell a
+ * fresh window from a stale one. It no longer runs a reset of its own - the
+ * class used to own a short "confirm again to reset" window, and the second
+ * click now always goes through {@code ResetAim#lockAndCast}.</p>
  *
  * <p>The state lives in the player's own persistent data
  * ({@code ServerPlayer#getPersistentData()}), never in a static field, so it is
  * per player and survives exactly as long as the player does. Three things are
- * remembered: the world clock (in milliseconds, so it matches
- * {@link CooldownPolicy#withinWindow(long, long, int)}) at which the reset was
- * announced, the dimension it was announced in, and the id of the announced
- * definition.</p>
+ * remembered: the world clock (in milliseconds) at which the window was opened,
+ * the dimension it was opened in, and the id of the definition it belongs
+ * to.</p>
  *
  * <p>The state is dropped again on logout, on a dimension change and on death,
- * because none of those may carry a pending confirmation into another context.
- * The engine also clears it as soon as a check finds it expired or belonging to
- * another dimension.</p>
+ * because none of those may carry a window into another context, and
+ * {@link ResetActivation#clearPlayer(ServerPlayer)} drops it whenever the
+ * window is closed.</p>
  */
 public final class ResetConfirmation {
 
@@ -44,13 +44,14 @@ public final class ResetConfirmation {
     }
 
     /**
-     * Arms the two click confirmation of {@code player} for {@code definitionId}
-     * in {@code level}.
+     * Records that the aiming window of {@code player} was opened for
+     * {@code definitionId} in {@code level}.
      *
      * <p>The world game time is converted to milliseconds ({@code gameTime * 50})
      * because that is the unit
-     * {@link CooldownPolicy#withinWindow(long, long, int)} compares against
-     * {@code windowSeconds * 1000L}.</p>
+     * {@code CooldownPolicy#withinWindow(long, long, int)} compares against, which
+     * is how {@link ResetActivation} turns this timestamp back into a countdown.
+     * </p>
      */
     public static void arm(ServerPlayer player, ServerLevel level, String definitionId) {
         if (player == null || level == null) {
@@ -62,56 +63,7 @@ public final class ResetConfirmation {
         data.putString(TAG_DEFINITION, definitionId == null ? "" : definitionId);
     }
 
-    /**
-     * True when a second right click at {@code nowMillis} really confirms a
-     * reset of {@code level}.
-     *
-     * <p>A confirmation armed in another dimension or outside the configured
-     * window is stale: it is cleared here and reported as not armed, so the
-     * click is handled as a new first click.</p>
-     *
-     * @param player the acting player, may be null
-     * @param level the level the click happens in, may be null
-     * @param nowMillis the current world clock in milliseconds
-     */
-    public static boolean isArmed(ServerPlayer player, ServerLevel level, long nowMillis) {
-        if (player == null || level == null) {
-            return false;
-        }
-        CompoundTag data = player.getPersistentData();
-        long armedAt = data.getLong(TAG_ARMED_AT);
-        if (armedAt <= 0L) {
-            return false;
-        }
-        if (!level.dimension().location().toString().equals(data.getString(TAG_DIMENSION))) {
-            clear(player);
-            return false;
-        }
-        if (!CooldownPolicy.withinWindow(nowMillis, armedAt, StructureResetConfig.confirmWindowSeconds())) {
-            clear(player);
-            return false;
-        }
-        return true;
-    }
-
-    /**
-     * The definition id the player's pending confirmation was armed for, or
-     * null when none is pending. Purely informational: the confirming click
-     * selects its definition again, exactly like a single click flow does.
-     */
-    @Nullable
-    public static String armedDefinitionId(ServerPlayer player) {
-        if (player == null) {
-            return null;
-        }
-        CompoundTag data = player.getPersistentData();
-        if (data.getLong(TAG_ARMED_AT) <= 0L) {
-            return null;
-        }
-        return data.getString(TAG_DEFINITION);
-    }
-
-    /** Forgets a pending confirmation; safe to call when there is none. */
+    /** Forgets a pending window; safe to call when there is none. */
     public static void clear(ServerPlayer player) {
         if (player == null) {
             return;

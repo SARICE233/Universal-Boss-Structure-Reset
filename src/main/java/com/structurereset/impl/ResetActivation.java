@@ -55,11 +55,6 @@ public final class ResetActivation {
     /** Persistent data value: the whole second of the window that was last shown. */
     public static final String TAG_SHOWN_SECOND = "structurereset:confirm_shown_second";
 
-    /** Translation key of the armed countdown line. */
-    public static final String MESSAGE_ACTIVE = "item.structurereset.structure_reset_core.aim.aiming";
-    /** Translation key of the "the window expired" line. */
-    public static final String MESSAGE_EXPIRED = "item.structurereset.structure_reset_core.aim.expired";
-
     private ResetActivation() {
     }
 
@@ -212,7 +207,7 @@ public final class ResetActivation {
             boolean wasActive = data.getBoolean(TAG_ACTIVE);
             clearPlayer(player);
             if (wasActive) {
-                player.displayClientMessage(Component.translatable(MESSAGE_EXPIRED)
+                player.displayClientMessage(Component.translatable(ResetAim.MESSAGE_EXPIRED)
                         .withStyle(ChatFormatting.RED), true);
             }
             return;
@@ -221,7 +216,9 @@ public final class ResetActivation {
         if (!data.contains(TAG_SHOWN_SECOND)
                 || data.getLong(TAG_SHOWN_SECOND) != (long) secondsLeft) {
             data.putLong(TAG_SHOWN_SECOND, (long) secondsLeft);
-            player.displayClientMessage(Component.translatable(MESSAGE_ACTIVE)
+            // The countdown reuses the aiming line of ResetAim: there is only one
+            // wording (and one key) for "the aiming window is open".
+            player.displayClientMessage(Component.translatable(ResetAim.MESSAGE_AIMING)
                     .withStyle(ChatFormatting.GOLD), true);
         }
     }

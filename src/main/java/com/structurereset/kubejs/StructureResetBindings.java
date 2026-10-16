@@ -25,6 +25,7 @@ import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.world.item.Item;
+import net.minecraft.world.item.Items;
 import net.minecraftforge.server.ServerLifecycleHooks;
 
 /**
@@ -230,16 +231,42 @@ public final class StructureResetBindings {
     /**
      * Overrides the model of an item for the client.
      *
-     * @param itemId  e.g. {@code structurereset:structure_reset_core}
-     * @param modelId e.g. {@code mypack:item/reset_core_gold}
+     * <p>The second id names <em>another registered item</em> whose baked
+     * inventory model is borrowed; it is not a path to a model file. Both ids are
+     * checked here, so a script that passes a model file path gets
+     * {@code false} immediately instead of a {@code true} followed by a warning
+     * at model baking time.</p>
+     *
+     * @param itemId the item whose model changes, e.g.
+     *        {@code structurereset:structure_reset_core}
+     * @param modelId the id of the registered item to borrow the model from,
+     *        e.g. {@code minecraft:clock}
+     * @return true when the override was stored, false when either id is not a
+     *         registered item
      */
     public static boolean setItemModel(String itemId, String modelId) {
         Item item = item(itemId);
-        if (item == null) {
+        if (item == null || item == Items.AIR) {
             return false;
         }
-        ItemAppearanceApi.setModelOverride(item, new ResourceLocation(modelId));
+        ResourceLocation target = resourceLocation(modelId);
+        if (target == null) {
+            return false;
+        }
+        Item source = BuiltInRegistries.ITEM.get(target);
+        if (source == null || source == Items.AIR) {
+            return false;
+        }
+        ItemAppearanceApi.setModelOverride(item, target);
         return true;
+    }
+
+    /** One registry id, or null when the text is not a well formed id. */
+    private static ResourceLocation resourceLocation(String id) {
+        if (id == null || id.isBlank()) {
+            return null;
+        }
+        return ResourceLocation.tryParse(id.trim());
     }
 
     /** Clears a model override previously set by {@link #setItemModel}. */

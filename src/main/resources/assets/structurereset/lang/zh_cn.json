@@ -1,5 +1,4 @@
 {
-  "itemGroup.structurereset": "结构重置",
   "item.structurereset.structure_reset_core": "结构重置核心",
   "item.structurereset.structure_reset_core.tooltip": "右键：瞄准复活点（再次右键读条召唤）\n潜行右键：教学 / 结构扫描\n左键：记录战利品表",
   "item.structurereset.structure_reset_core.ready": "状态：就绪",

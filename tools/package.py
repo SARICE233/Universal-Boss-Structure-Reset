@@ -11,18 +11,24 @@ layer:
    together with everything that depends on them, and the compilation is
    retried until it succeeds.  A genuine compile error -- anything that is not a
    missing type -- aborts the script instead of silently dropping the file;
-3. the surviving classes are compiled into build/classes;
+3. the surviving classes are compiled into a scratch tree private to this
+   invocation -- never into a fixed build/classes that an overlapping invocation
+   could delete from under it;
 4. src/main/resources and the compiled classes are written into
    build/dist/<mod_id>-<mod_version>-dev.jar with a deterministic java.util.zip
    compatible writer: entries are sorted, timestamps and permissions are fixed,
-   so packaging the same tree twice yields byte-identical archives.
+   so packaging the same tree twice yields byte-identical archives.  The archive
+   is assembled in a staging file and moved onto the target in one step, so two
+   invocations that package at the same time publish two complete archives
+   instead of interleaving inside one open file.
 
 The jar therefore never contains classes that need a Forge classpath; it is a
 resource + pure-logic artefact, and the fact is printed at the end.
 
 Usage:
     python tools/package.py             # build build/dist/<modid>-<version>-dev.jar
-    python tools/package.py --selftest  # prove compilation, exclusion and determinism
+    python tools/package.py --selftest  # prove compilation, exclusion, determinism
+                                        # and that two simultaneous runs agree
 """
 
 from __future__ import annotations
@@ -33,7 +39,8 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
+import time
+import uuid
 import zipfile
 from pathlib import Path
 
@@ -288,26 +295,71 @@ def manifest_text(mod_id, mod_version, group):
 
 
 def write_jar(jar_path, entries):
-    """Deterministic zip writer: sorted names, fixed timestamp and permissions."""
+    """Deterministic zip writer: sorted names, fixed timestamp and permissions.
+
+    The archive is assembled in a uniquely named staging file next to the target
+    and then moved onto it in a single step, so two invocations packaging the
+    same project at the same time each publish a complete archive instead of
+    writing into one shared open file.
+    """
     jar_path = Path(jar_path)
     jar_path.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(jar_path, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
-        for name in sorted(entries):
-            info = zipfile.ZipInfo(name, date_time=FIXED_DATE)
-            info.compress_type = zipfile.ZIP_DEFLATED
-            info.create_system = 3
-            info.external_attr = 0o644 << 16
-            archive.writestr(info, entries[name])
-    return jar_path
+    staging = jar_path.with_name("%s.%d-%s.tmp"
+                                 % (jar_path.name, os.getpid(), uuid.uuid4().hex[:8]))
+    try:
+        with zipfile.ZipFile(staging, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+            for name in sorted(entries):
+                info = zipfile.ZipInfo(name, date_time=FIXED_DATE)
+                info.compress_type = zipfile.ZIP_DEFLATED
+                info.create_system = 3
+                info.external_attr = 0o644 << 16
+                archive.writestr(info, entries[name])
+        last_error = None
+        for attempt in range(20):
+            try:
+                os.replace(staging, jar_path)
+                return jar_path
+            except OSError as exc:
+                # Windows can briefly refuse the replacement while another
+                # process is still closing the same target file.
+                last_error = exc
+                time.sleep(0.05 * (attempt + 1))
+        raise PackageError("cannot publish %s (%s)" % (jar_path, last_error))
+    finally:
+        if staging.exists():
+            try:
+                staging.unlink()
+            except OSError:
+                pass
 
 
-def build(workspace, out_dir=None, quiet=False, log=print):
-    """Compile the pure subset and package it; returns a result dictionary."""
+def make_scratch_dirs(workspace, scratch_root=None):
+    """(run_dir, classes_dir, scratch_dir) private to this process invocation.
+
+    The name carries the pid and a random token, so two invocations that overlap
+    can never compile into, or clean, the same directory.  The parent itself is
+    picked by tools/toolchain.py, which falls back to <workspace>/build when the
+    system temp directory cannot hold a new one.
+    """
+    try:
+        run_dir = toolchain.make_scratch_dir("structurereset-package", workspace,
+                                             subdirs=("classes", "pure-scratch"),
+                                             root=scratch_root)
+    except RuntimeError as exc:
+        raise PackageError(str(exc))
+    return run_dir, run_dir / "classes", run_dir / "pure-scratch"
+
+
+def build(workspace, out_dir=None, quiet=False, log=print, scratch_root=None):
+    """Compile the pure subset and package it; returns a result dictionary.
+
+    Every intermediate file lives in a scratch tree private to this call, so
+    overlapping invocations cannot clean each other's classes, and the jar is
+    published with one atomic move.
+    """
     workspace = Path(workspace).resolve()
     mod_id, mod_version, group = project_metadata(workspace)
     out_dir = Path(out_dir) if out_dir else workspace / "build" / "dist"
-    classes_dir = workspace / "build" / "classes"
-    scratch_dir = workspace / "build" / "pure-scratch"
     jar_path = out_dir / ("%s-%s-dev.jar" % (mod_id, mod_version))
 
     all_sources = collect_java(workspace / "src" / "main" / "java")
@@ -330,22 +382,24 @@ def build(workspace, out_dir=None, quiet=False, log=print):
         log("package: classpath = %s" % (classpath or "(none)"))
         log("package: %d source file(s) offered to javac" % len(all_sources))
 
-    compiled, dropped = select_pure_sources(javac_path, all_sources, classpath,
-                                            scratch_dir, log=None if quiet else log)
-    if dropped and not quiet:
-        log("package: %d source file(s) need a Forge/Minecraft classpath and are not packaged"
-            % len(dropped))
+    run_dir, classes_dir, scratch_dir = make_scratch_dirs(workspace, scratch_root)
+    try:
+        compiled, dropped = select_pure_sources(javac_path, all_sources, classpath,
+                                                scratch_dir, log=None if quiet else log)
+        if dropped and not quiet:
+            log("package: %d source file(s) need a Forge/Minecraft classpath and are not packaged"
+                % len(dropped))
 
-    shutil.rmtree(classes_dir, ignore_errors=True)
-    if compiled:
-        code, output = compile_sources(javac_path, compiled, classpath, classes_dir)
-        if code != 0:
-            raise PackageError("final compilation failed:\n" + output.strip())
-    shutil.rmtree(scratch_dir, ignore_errors=True)
+        if compiled:
+            code, output = compile_sources(javac_path, compiled, classpath, classes_dir)
+            if code != 0:
+                raise PackageError("final compilation failed:\n" + output.strip())
 
-    entries = collect_entries(workspace, classes_dir)
-    entries["META-INF/MANIFEST.MF"] = manifest_text(mod_id, mod_version, group).encode("utf-8")
-    write_jar(jar_path, entries)
+        entries = collect_entries(workspace, classes_dir)
+        entries["META-INF/MANIFEST.MF"] = manifest_text(mod_id, mod_version, group).encode("utf-8")
+        write_jar(jar_path, entries)
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
 
     class_count = sum(1 for name in entries if name.endswith(".class"))
     result = {
@@ -467,9 +521,58 @@ def _make_sample(root):
     return root
 
 
+def parallel_build_check(sample, parallel_dir, sequential_jar, ok):
+    """Start two packaging invocations at once and compare what they publish.
+
+    Older revisions compiled into the fixed build/classes and build/pure-scratch
+    directories, so an overlapping invocation deleted the other one's classes and
+    still exited 0 with an empty jar.  Both children here must succeed and
+    publish exactly the bytes the sequential build produced.
+    """
+    children = []
+    for index in (1, 2):
+        children.append(subprocess.Popen(
+            [sys.executable, str(SCRIPT), "--workspace", str(sample),
+             "--out-dir", str(parallel_dir), "--quiet"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, encoding="utf-8", errors="replace"))
+    outcomes = []
+    for index, child in enumerate(children, start=1):
+        try:
+            out, err = child.communicate(timeout=900)
+        except subprocess.TimeoutExpired:
+            child.kill()
+            out, err = child.communicate()
+            print("FAIL: selftest: simultaneous package run %d did not finish" % index)
+            ok = False
+            outcomes.append((None, "", ""))
+            continue
+        outcomes.append((child.returncode, out or "", err or ""))
+        detail = ""
+        if outcomes[-1][2].strip():
+            detail = " stderr=" + outcomes[-1][2].strip().splitlines()[-1]
+        print("selftest: simultaneous package run %d pid=%d exit=%s%s"
+              % (index, child.pid, child.returncode, detail))
+
+    codes = [code for code, _, _ in outcomes]
+    if codes != [0, 0]:
+        print("FAIL: selftest: a simultaneous package invocation did not succeed (%s)" % codes)
+        return False
+    parallel_jar = Path(parallel_dir) / Path(sequential_jar).name
+    if not parallel_jar.is_file():
+        print("FAIL: selftest: a simultaneous package invocation published no jar")
+        return False
+    if parallel_jar.read_bytes() != Path(sequential_jar).read_bytes():
+        print("FAIL: selftest: the simultaneous runs published different bytes")
+        return False
+    print("selftest: two simultaneous package invocations both published the identical "
+          "%d-byte jar" % parallel_jar.stat().st_size)
+    return ok
+
+
 def selftest():
     """Prove compilation, exclusion of Minecraft classes and deterministic output."""
-    tmp = Path(tempfile.mkdtemp(prefix="structurereset-package-selftest-"))
+    tmp = toolchain.make_scratch_dir("structurereset-package-selftest", WORKSPACE)
     ok = True
     silent = lambda message: None
     try:
@@ -506,6 +609,8 @@ def selftest():
         if result["jar"].read_bytes() != second["jar"].read_bytes():
             print("FAIL: selftest: packaging the same tree twice is not deterministic")
             ok = False
+
+        ok = parallel_build_check(sample, tmp / "out-parallel", result["jar"], ok) and ok
 
         broken = _make_sample(tmp / "broken")
         _write(broken / "src" / "main" / "java" / "sample" / "BrokenPure.java", BROKEN_SOURCE)

@@ -145,4 +145,29 @@ class ResourceSmokeTest {
                     "lang key '" + key + "' is not namespaced to " + MODID);
         }
     }
+
+    /**
+     * Every translation key of the shipped language files is really looked up.
+     *
+     * <p>A key nothing uses is a promise nothing keeps. The audit found
+     * {@code itemGroup.structurereset} in exactly that state: it described a
+     * creative tab this mod never registered, so a player searching for the item
+     * there found nothing. The item name key itself passes because its longer
+     * tooltip key contains it, which is also how vanilla composes the name.</p>
+     */
+    @Test
+    void everyLangKeyIsUsedByTheSource() throws IOException {
+        Set<String> english = topLevelKeys(read(resources("assets", MODID, "lang", "en_us.json")));
+        StringBuilder source = new StringBuilder();
+        try (var paths = Files.walk(workspace().resolve(Path.of("src", "main", "java")))) {
+            for (Path path : paths.filter(Files::isRegularFile)
+                    .filter(candidate -> candidate.toString().endsWith(".java")).toList()) {
+                source.append(Files.readString(path, StandardCharsets.UTF_8)).append('\n');
+            }
+        }
+        for (String key : english) {
+            assertTrue(source.indexOf(key) >= 0,
+                    "lang key '" + key + "' is not used by any source file");
+        }
+    }
 }

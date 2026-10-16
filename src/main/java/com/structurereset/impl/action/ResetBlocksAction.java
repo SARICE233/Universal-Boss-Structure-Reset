@@ -8,7 +8,9 @@ import com.structurereset.StructureResetMod;
 import com.structurereset.core.ResetActionType;
 import com.structurereset.core.ResetContext;
 import com.structurereset.core.ResetResult;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.nbt.CompoundTag;
@@ -18,6 +20,7 @@ import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.entity.BlockEntityType;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.LevelChunk;
 
 /**
@@ -53,8 +56,17 @@ public final class ResetBlocksAction implements ResetActionType {
     /** How far around the origin the {@code mapping} mode looks, by default. */
     public static final int DEFAULT_RADIUS = 32;
 
-    /** The largest radius the {@code mapping} mode accepts. */
-    public static final int MAX_RADIUS = 64;
+    /**
+     * The largest radius the {@code mapping} mode accepts.
+     *
+     * <p>Deliberately small, because the mapping mode reads every position of a
+     * cube around the origin on the server thread: at 32 that is at most
+     * 65x65x65 = 274,625 position reads in one action, at the old 64 it was
+     * 129x129x129 = 2,146,689 - a server tick stall in a sealed room, which is
+     * exactly the situation the mode exists for. A sealed room is a few dozen
+     * blocks wide, so 32 covers every realistic use of the mode.</p>
+     */
+    public static final int MAX_RADIUS = 32;
 
     @Override
     public String id() {
@@ -65,7 +77,17 @@ public final class ResetBlocksAction implements ResetActionType {
     public ResetResult run(ResetContext ctx) {
         // The mapping mode comes first: it is the one a sealed room needs, and it
         // never coexists with an explicit block list.
-        JsonObject mapping = ctx.params() == null ? null : ctx.params().getAsJsonObject("mapping");
+        JsonObject params = ctx.params();
+        JsonElement mappingElement = params == null ? null : params.get("mapping");
+        if (mappingElement != null && !mappingElement.isJsonObject()) {
+            // JsonElement#getAsJsonObject() throws on a present-but-wrong shape, and the
+            // action level catch would turn that into the generic "action failed" line.
+            // The offending field is named instead.
+            return ResetResult.fail(MESSAGE_FAILED,
+                    "reset_blocks params.mapping must be an object of block id -> block id, got "
+                            + mappingElement);
+        }
+        JsonObject mapping = mappingElement == null ? null : mappingElement.getAsJsonObject();
         if (mapping != null && mapping.size() > 0) {
             int radius = Math.max(1, Math.min(MAX_RADIUS, ctx.paramInt("radius", DEFAULT_RADIUS)));
             int remapped = applyMapping(ctx, mapping, radius);
@@ -131,7 +153,12 @@ public final class ResetBlocksAction implements ResetActionType {
      *
      * <p>Only chunks that are already loaded are read, so a reset can never stall
      * the server thread on a chunk load, and only the radius that was asked for is
-     * walked, so the work stays bounded.</p>
+     * walked ({@value #MAX_RADIUS} at most), so the work is bounded.</p>
+     *
+     * <p>The mapping is resolved once into a block to block state table: doing it
+     * per inspected position meant a registry lookup, a string building and a JSON
+     * member lookup for up to 274,625 positions. The walk is chunk aligned as well,
+     * so each loaded chunk is looked up once instead of once per column.</p>
      *
      * @param ctx the action context, required
      * @param mapping unlocked block id to sealed block id
@@ -141,38 +168,62 @@ public final class ResetBlocksAction implements ResetActionType {
     private static int applyMapping(ResetContext ctx, JsonObject mapping, int radius) {
         ServerLevel level = ctx.level();
         BlockPos origin = ctx.origin();
+        Map<Block, BlockState> sealed = new HashMap<>();
+        for (Map.Entry<String, JsonElement> entry : mapping.entrySet()) {
+            JsonElement to = entry.getValue();
+            if (to == null || !to.isJsonPrimitive()) {
+                continue;
+            }
+            ResourceLocation fromId = ResourceLocation.tryParse(entry.getKey());
+            ResourceLocation toId = ResourceLocation.tryParse(to.getAsString());
+            if (fromId == null || toId == null) {
+                continue;
+            }
+            // BuiltInRegistries#get answers with the default entry (air) for an
+            // unknown id, so an unknown source block would otherwise map
+            // "air -> sealed" and fill every air position of the cube with the
+            // sealed block. An unknown target is dropped for the same reason.
+            Block from = BuiltInRegistries.BLOCK.get(fromId);
+            Block toBlock = BuiltInRegistries.BLOCK.get(toId);
+            if (from == null || from == Blocks.AIR
+                    || toBlock == null || toBlock == Blocks.AIR) {
+                continue;
+            }
+            sealed.put(from, toBlock.defaultBlockState());
+        }
+        if (sealed.isEmpty()) {
+            return 0;
+        }
+        int minY = Math.max(level.getMinBuildHeight(), origin.getY() - radius);
+        int maxY = Math.min(level.getMaxBuildHeight() - 1, origin.getY() + radius);
         int changed = 0;
-        int minY = level.getMinBuildHeight();
-        int maxY = level.getMaxBuildHeight() - 1;
-        for (int dx = -radius; dx <= radius; dx++) {
-            int x = origin.getX() + dx;
-            for (int dz = -radius; dz <= radius; dz++) {
-                int z = origin.getZ() + dz;
-                LevelChunk chunk = level.getChunkSource().getChunkNow(x >> 4, z >> 4);
+        int minChunkX = (origin.getX() - radius) >> 4;
+        int maxChunkX = (origin.getX() + radius) >> 4;
+        int minChunkZ = (origin.getZ() - radius) >> 4;
+        int maxChunkZ = (origin.getZ() + radius) >> 4;
+        for (int chunkX = minChunkX; chunkX <= maxChunkX; chunkX++) {
+            int startX = Math.max(origin.getX() - radius, chunkX << 4);
+            int endX = Math.min(origin.getX() + radius, (chunkX << 4) + 15);
+            for (int chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ++) {
+                LevelChunk chunk = level.getChunkSource().getChunkNow(chunkX, chunkZ);
                 if (chunk == null) {
                     continue;
                 }
-                for (int dy = -radius; dy <= radius; dy++) {
-                    int y = origin.getY() + dy;
-                    if (y < minY || y > maxY) {
-                        continue;
-                    }
-                    BlockPos pos = new BlockPos(x, y, z);
-                    ResourceLocation current = BuiltInRegistries.BLOCK.getKey(chunk.getBlockState(pos).getBlock());
-                    JsonElement to = mapping.get(current.toString());
-                    if (to == null || !to.isJsonPrimitive()) {
-                        continue;
-                    }
-                    ResourceLocation sealedId = ResourceLocation.tryParse(to.getAsString());
-                    if (sealedId == null) {
-                        continue;
-                    }
-                    Block sealed = BuiltInRegistries.BLOCK.get(sealedId);
-                    if (sealed == null || sealed == Blocks.AIR) {
-                        continue;
-                    }
-                    if (level.setBlock(pos, sealed.defaultBlockState(), Block.UPDATE_ALL)) {
-                        changed++;
+                int startZ = Math.max(origin.getZ() - radius, chunkZ << 4);
+                int endZ = Math.min(origin.getZ() + radius, (chunkZ << 4) + 15);
+                for (int x = startX; x <= endX; x++) {
+                    for (int z = startZ; z <= endZ; z++) {
+                        for (int y = minY; y <= maxY; y++) {
+                            BlockPos pos = new BlockPos(x, y, z);
+                            BlockState current = chunk.getBlockState(pos);
+                            BlockState replacement = sealed.get(current.getBlock());
+                            if (replacement == null || replacement == current) {
+                                continue;
+                            }
+                            if (level.setBlock(pos, replacement, Block.UPDATE_ALL)) {
+                                changed++;
+                            }
+                        }
                     }
                 }
             }

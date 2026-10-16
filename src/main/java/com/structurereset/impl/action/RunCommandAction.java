@@ -41,10 +41,9 @@ public final class RunCommandAction implements ResetActionType {
         if (raw.isBlank()) {
             return ResetResult.fail(MESSAGE_FAILED, "run_command requires a params.command");
         }
+        // A leading "/" needs no special handling: performPrefixedCommand strips it
+        // itself, and stripping it here as well only meant doing the same work twice.
         String command = ctx.placeholders(raw);
-        if (command.startsWith("/")) {
-            command = command.substring(1);
-        }
         if (command.isBlank()) {
             return ResetResult.fail(MESSAGE_FAILED, "the command of run_command resolved to nothing");
         }
@@ -62,7 +61,13 @@ public final class RunCommandAction implements ResetActionType {
             source = server.createCommandSourceStack().withPermission(permission);
         }
         try {
-            server.getCommands().performPrefixedCommand(source, command);
+            int executed = server.getCommands().performPrefixedCommand(source, command);
+            if (executed == 0) {
+                // A command that ran no branch at all (a silent parse failure or a
+                // false requirement) must not be reported as a successful action.
+                return ResetResult.fail(MESSAGE_FAILED,
+                        "the command '" + command + "' did not run (it returned 0)");
+            }
         } catch (RuntimeException failure) {
             return ResetResult.fail(MESSAGE_FAILED, "the command '" + command + "' failed: " + failure);
         }
