@@ -83,7 +83,23 @@ skel_MOD_ID = "structurereset"
 skel_MINECRAFT_VERSION = "1.20.1"
 skel_FORGE_VERSION = "47.3.22"
 skel_KUBEJS_VERSION = "2001.6.5-build.26"
-skel_MOD_VERSION = "0.1.0-alpha"
+# The version this workspace is on. The newest CHANGELOG release heading is the
+# single source of truth, so a version bump only has to touch gradle.properties and
+# CHANGELOG.md; the literal below is only the fallback for a missing heading.
+skel_MOD_VERSION_FALLBACK = "0.1.0-alpha"
+
+
+def skel_newest_changelog_version(workspace: Path):
+    """The newest '## <version> - <title>' heading of CHANGELOG.md, or None."""
+    try:
+        text = (Path(workspace) / "CHANGELOG.md").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    match = re.search(r"^##\s+(\d+\.\d+\.\d+[^\s\u2014]*)\s+\u2014", text, re.M)
+    return match.group(1) if match else None
+
+
+skel_MOD_VERSION = skel_newest_changelog_version(skel_WORKSPACE) or skel_MOD_VERSION_FALLBACK
 
 skel_REQUIRED_FILES = (
     "settings.gradle",
@@ -832,7 +848,7 @@ impl_CONFIG_NAMES = (
     "debugLogging",
     "learningEnabled",
     "learningRadius",
-    "learningMinMaxHealth",
+    "learningBossTags",
     "learningRequireOp",
 )
 impl_MIN_CONFIG_NAMES = 12
@@ -1208,6 +1224,10 @@ surf_PURE_API_FILES = (
     "RespawnPlanner.java",
     "SpawnHeights.java",
     "SpawnVerdict.java",
+    # The pure parser of the optional Boss Checklist id list: gson only, so it
+    # belongs to the same Minecraft-free layer and is covered by the offline
+    # JUnit run (src/test/java/.../BossChecklistIdsTest.java).
+    "BossChecklistIds.java",
 )
 
 surf_API_METHODS = (
@@ -4094,6 +4114,14 @@ def _run_coverage(argv):
 def _run_appearance(argv):
     return appear_main()
 
+
+def _run_resources(argv):
+    # 'resources' is the historical name of the resource-pack rule set; the
+    # rules themselves live in the appearance checker, which validates the item
+    # model, textures, recipe and the en_us/zh_cn language files. Kept as an
+    # alias so a caller that asks for the resources section still gets them.
+    return appear_main()
+
 def _run_kubejs(argv):
     return kjs_main(argv)
 
@@ -4111,6 +4139,7 @@ _RUNNERS = {
     'api-surface': _run_api_surface,
     'coverage': _run_coverage,
     'appearance': _run_appearance,
+    'resources': _run_resources,
     'kubejs': _run_kubejs,
     'docs': _run_docs,
     'kubejs-fetch': _run_kubejs_fetch,

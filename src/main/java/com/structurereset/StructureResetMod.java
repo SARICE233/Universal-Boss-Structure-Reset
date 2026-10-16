@@ -5,6 +5,7 @@ import com.structurereset.command.StructureResetCommand;
 import com.structurereset.config.StructureResetConfig;
 import com.structurereset.core.StructureResetApi;
 import com.structurereset.impl.AutoLearnHandler;
+import com.structurereset.impl.BossChecklistBridge;
 import com.structurereset.impl.DefinitionReloadListener;
 import com.structurereset.impl.LootCaptureHandler;
 import com.structurereset.impl.ResetActivation;
@@ -59,6 +60,11 @@ public class StructureResetMod {
                 AddReloadListenerEvent.class, StructureResetMod::onAddReloadListeners);
         MinecraftForge.EVENT_BUS.addListener(EventPriority.NORMAL, false,
                 RegisterCommandsEvent.class, StructureResetMod::onRegisterCommands);
+        // The optional Boss Checklist bridge refreshes its cached id list when the
+        // data packs are synced with a joining player. Its reload listener below
+        // covers the other half (the initial load and /reload), and both are no-ops
+        // while Boss Checklist is not installed: nothing here is per tick.
+        MinecraftForge.EVENT_BUS.addListener(BossChecklistBridge::onDatapackSync);
         // A pending two click confirmation is dropped whenever the player
         // leaves, changes dimension or dies: none of those may carry an armed
         // reset into the next context.
@@ -124,6 +130,10 @@ public class StructureResetMod {
     private static void onAddReloadListeners(AddReloadListenerEvent event) {
         event.addListener(new DefinitionReloadListener());
         LOGGER.debug("[{}] registered the structure reset definition reload listener", MODID);
+        // The optional Boss Checklist bridge reads its id list through the resource
+        // manager of whichever reload is in flight, so recognition never touches the
+        // disk. The listener does nothing at all when the mod is absent.
+        event.addListener(new BossChecklistBridge.ReloadListener());
     }
 
     /** Adds the {@code /structurereset} command tree to every server dispatcher. */

@@ -36,6 +36,7 @@ com.structurereset.kubejs.StructureResetKubeJSPlugin
 | `setItemModel(itemId, targetItemId)` | 两个**已注册物品** id | 布尔 | 借用另一个物品已烘焙的物品模型（不是模型文件路径） |
 | `clearItemModel(itemId)` / `itemModel(itemId)` | id | 布尔 / 字符串 | 撤销 / 读取当前模型覆盖 |
 | `learned()` / `forget(id)` | — / 字符串 | JsonObject 数组 / 布尔 | 查看 / 删除学习（录入）记录 |
+| `setBossFilter(fn)` / `clearBossFilter()` | 函数 / — | — | 注册 / 清除脚本 Boss 过滤器：注册后它**独占**自动识别，函数返回 `true` 才算 Boss，见 [LEARNING.md](LEARNING.md) 第 3 节 |
 
 ### 2.1 注册一条定义
 

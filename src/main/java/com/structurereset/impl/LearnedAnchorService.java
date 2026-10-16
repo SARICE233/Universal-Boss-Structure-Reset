@@ -91,8 +91,20 @@ public final class LearnedAnchorService {
             "structurereset.message.learning.excluded_namespace";
     /** Translation key used when the target is on the teaching deny list. */
     public static final String MESSAGE_DENIED = "structurereset.message.learning.denied";
-    /** Translation key used when the target is below the configured maximum health. */
+    /**
+     * Translation key used when the target matched no boss criterion at all: no
+     * script filter accepted it, it is not on the allow list, it carries no boss
+     * entity tag, no configured boss NBT key and no entry in the optional Boss
+     * Checklist list. Every automatic path treats it as "not a boss"; only an
+     * explicit designation records it, and that reply
+     * is {@link #MESSAGE_UNRECOGNISED}.
+     */
     public static final String MESSAGE_TOO_WEAK = "structurereset.message.learning.too_weak";
+    /**
+     * Translation key of the warning that an explicit designation recorded a mob
+     * no boss criterion recognised. It takes the entity id of the target.
+     */
+    public static final String MESSAGE_UNRECOGNISED = "structurereset.message.learning.unrecognised";
     /** Translation key of a record registered by the administrative teach-here command. */
     public static final String MESSAGE_ADMIN_RECORDED =
             "structurereset.message.learning.admin_recorded";
@@ -141,9 +153,17 @@ public final class LearnedAnchorService {
      * a registered script filter ({@code com.structurereset.core.BossFilterApi})
      * decides alone when one exists, then the allow list, the excluded
      * namespaces and the deny list apply, then the boss entity tags named by
-     * {@code learningBossTags}, then the optional {@code learningBossNbtKeys} and
-     * finally the {@code learningMinMaxHealth} threshold (0 disables it). A
-     * target that fails every one of those reports {@link #MESSAGE_TOO_WEAK}.</p>
+     * {@code learningBossTags}, then the optional
+     * {@code learningBossNbtKeys} and finally the boss id list of the optional
+     * Boss Checklist soft dependency ({@link BossChecklistBridge}).</p>
+     *
+     * <p>An explicit designation wins over that classification: pointing the core
+     * at a living entity and sneaking is a deliberate act, so a target that
+     * matched no boss criterion is recorded all the same. Its reply is then
+     * {@link #MESSAGE_UNRECOGNISED}, a warning that names the entity and says
+     * that it matched no boss tag, while a recognised target keeps
+     * {@link #MESSAGE_RECORDED}. What a health guess used to decide is now
+     * decided by the player.</p>
      *
      * @param player the player doing the teaching, required
      * @param target the mob that is being taught, required
@@ -176,14 +196,16 @@ public final class LearnedAnchorService {
         // The entity classification, in the documented order: a registered
         // script filter decides alone, then the allow list, the excluded
         // namespaces, the deny list, the boss entity tags, the optional boss NBT
-        // keys and finally the maximum health threshold. It runs on every entry
-        // point - only the "stand inside a structure" and "look at the target"
-        // gates are specific to the item path.
+        // keys and the optional Boss Checklist list. It runs on every entry point - only the "stand inside a
+        // structure" and "look at the target" gates are specific to the item
+        // path. A rejection does not refuse the teaching: the player pointed at
+        // this mob on purpose, so the explicit designation wins and the mob is
+        // recorded anyway, with a warning instead of the ordinary reply.
         String rejection = classify(target);
-        if (rejection != null) {
-            LOGGER.info("[{}] teaching refused: {} rejected the target {}",
-                    StructureResetConfig.MOD_ID, rejection, entityIdOf(target));
-            return failure(rejection, "the target was rejected by " + rejection);
+        boolean unrecognised = rejection != null;
+        if (unrecognised) {
+            LOGGER.info("[{}] teaching {} anyway: it matched no boss criterion ({})",
+                    StructureResetConfig.MOD_ID, entityIdOf(target), rejection);
         }
         if (!(target.level() instanceof ServerLevel level)) {
             return failure(MESSAGE_FAILED, "the target is not in a server level");
@@ -214,6 +236,11 @@ public final class LearnedAnchorService {
                 level.getGameTime(), learnedBy);
         data.add(anchor);
         String structuresText = structureIds.isEmpty() ? "-" : String.join(", ", structureIds);
+        if (unrecognised) {
+            return new TeachResult(true, MESSAGE_UNRECOGNISED,
+                    Component.translatable(MESSAGE_UNRECOGNISED, bossEntity), id,
+                    scan.containers().size(), structureIds.size(), scan.noLootTableCount());
+        }
         Component message = Component.translatable(MESSAGE_RECORDED, bossEntity,
                 scan.containers().size(), structuresText, scan.noLootTableCount());
         return new TeachResult(true, MESSAGE_RECORDED, message, id, scan.containers().size(),
@@ -229,12 +256,13 @@ public final class LearnedAnchorService {
      * <p>An operator who explicitly names the boss entity does not have to look
      * at it and does not have to stand inside a structure this mod can see, so
      * exactly those two gates are skipped. Everything else is identical to the
-     * item path: the enable switch and the whole entity classification (the
-     * script filter, the allow list, the excluded namespaces, the deny list, the
-     * boss tags, the NBT keys and the health threshold) still apply. That is
-     * what makes the command usable for a hand built arena or for a custom area
-     * the structure manager does not know, while keeping it from recording a
-     * random mob as a boss.</p>
+     * item path: the enable switch, the "is that a living entity" test and the
+     * whole entity classification (the script filter, the allow list, the
+     * excluded namespaces, the deny list, the boss tags and the NBT keys) still
+     * run. Naming a boss that no tag knows is an explicit designation just like
+     * the item path, so it is recorded too - with {@link #MESSAGE_UNRECOGNISED}
+     * instead of {@link #MESSAGE_ADMIN_RECORDED} - and only an id the registry
+     * does not know, or a target that is not a living mob at all, is refused.</p>
      *
      * <p>The record itself is exactly the one the item path writes - same
      * dimension, same boss entity id, the operator's block position as the
@@ -264,17 +292,32 @@ public final class LearnedAnchorService {
         if (!(player.level() instanceof ServerLevel level)) {
             return failure(MESSAGE_FAILED, "the player is not in a server level");
         }
-        // Only the two positional gates are skipped here: the classification is the
-        // same one the item path runs, so "/structurereset records teach-here
-        // minecraft:cow" is refused exactly like a right click on a cow would be.
+        // A named target that is not a mob at all - an item, a projectile, a
+        // marker - is still refused: an explicit designation names a living
+        // entity, never something that can never be a boss.
+        if (!createsLivingEntity(level, type)) {
+            LOGGER.info("[{}] admin teaching refused: {} is not a living entity",
+                    StructureResetConfig.MOD_ID, id);
+            return failure(MESSAGE_TOO_WEAK, "the target is not a living entity");
+        }
+        // Only the two positional gates are skipped here: the classification is
+        // the same one the item path runs and, exactly as there, a rejection
+        // does not refuse the teaching - the operator named this entity on
+        // purpose, so it is recorded anyway with a warning.
         String rejection = classifyType(level, type);
-        if (rejection != null) {
-            LOGGER.info("[{}] admin teaching refused: {} rejected the target {}",
-                    StructureResetConfig.MOD_ID, rejection, id);
-            return failure(rejection, "the target was rejected by " + rejection);
+        boolean unrecognised = rejection != null;
+        if (unrecognised) {
+            LOGGER.info("[{}] admin teaching {} anyway: it matched no boss criterion ({})",
+                    StructureResetConfig.MOD_ID, id, rejection);
         }
         BlockPos point = player.blockPosition();
         Recorded recorded = record(level, player, id.toString(), point);
+        if (unrecognised) {
+            return new TeachResult(true, MESSAGE_UNRECOGNISED,
+                    Component.translatable(MESSAGE_UNRECOGNISED, id.toString()), recorded.anchorId(),
+                    recorded.containers().size(), recorded.structureIds().size(),
+                    recorded.noLootTableCount());
+        }
         Component structures = recorded.structureIds().isEmpty()
                 ? Component.translatable(MESSAGE_BOUND_BY_RADIUS, recorded.radius())
                 : Component.literal(String.join(", ", recorded.structureIds()));
@@ -370,15 +413,20 @@ public final class LearnedAnchorService {
     }
 
     /**
-     * The layered entity classification of the item teaching path.
+     * The layered entity classification shared by every entry point.
      *
      * <p>Returns the translation key of the rule that rejected the target, or
-     * null when the target is accepted. The order is fixed:
+     * null when the target is a recognised boss. The order is fixed:
      * a registered script filter alone, then {@code learningEntityAllowlist},
      * then {@code learningExcludedNamespaces}, then
      * {@code learningEntityDenylist}, then the entity tags named by
      * {@code learningBossTags}, then the optional {@code learningBossNbtKeys}
-     * and finally the {@code learningMinMaxHealth} threshold (0 disables it).</p>
+     * and finally, as the last acceptance step before giving up, the boss id
+     * list of the optional Boss Checklist soft dependency
+     * ({@link BossChecklistBridge#isListedBoss(net.minecraft.world.entity.EntityType)}).
+     * A target that passes none of them is not a boss
+     * ({@link #MESSAGE_TOO_WEAK}): there is no size or health based fallback any
+     * more, and only an explicit designation records such a target.</p>
      */
     private static String classify(LivingEntity target) {
         Boolean scriptVerdict = BossFilterApi.test(BossFilterApi.describe(target));
@@ -404,11 +452,20 @@ public final class LearnedAnchorService {
         if (carriesAnyBossNbtKey(target, StructureResetConfig.learningBossNbtKeys())) {
             return null;
         }
-        int minHealth = StructureResetConfig.learningMinMaxHealth();
-        if (minHealth > 0 && target.getMaxHealth() < (float) minHealth) {
-            return MESSAGE_TOO_WEAK;
+        // The last acceptance step, after the entity tags and after the NBT keys:
+        // the optional Boss Checklist soft dependency. It is a hint, never a gate -
+        // the bridge answers false at once when the mod is absent, when its list is
+        // missing or malformed, and when the list simply does not name this entity -
+        // and it never reads the disk here: it serves the cache the reload listener
+        // refreshed.
+        if (BossChecklistBridge.isListedBoss(target.getType())) {
+            return null;
         }
-        return null;
+        // Nothing recognised the target: no script filter verdict, no allow list
+        // entry, no boss entity tag, no boss NBT key and no Boss Checklist entry.
+        // It is not a boss for any automatic path, and only a player designating it
+        // explicitly records it.
+        return MESSAGE_TOO_WEAK;
     }
 
     /** The registry id of an entity type, or an empty string when it has none. */
@@ -446,9 +503,9 @@ public final class LearnedAnchorService {
      * True when the target's entity type carries one of the configured boss
      * tags.
      *
-     * <p>The tag list is a first class criterion and comes before the health
-     * threshold: every mod that follows the Forge convention and tags its bosses
-     * with {@code forge:bosses} is recognised without any threshold tuning.
+     * <p>The tag list is a first class criterion - the one that actually
+     * recognises a boss: every mod that follows the Forge convention and tags its
+     * bosses with {@code forge:bosses} is recognised without any configuration.
      * Entries may be written with or without a leading {@code '#'}.</p>
      */
     private static boolean carriesAnyBossTag(LivingEntity target) {
@@ -775,6 +832,27 @@ public final class LearnedAnchorService {
     public static final String MESSAGE_SCANNED = "structurereset.message.learning.scanned";
     /** Shown when a structure scan found nothing it could record. */
     public static final String MESSAGE_SCAN_NONE = "structurereset.message.learning.scan_none";
+    /**
+     * Shown when a structure scan found no boss candidate but did see a crowd of
+     * ordinary mobs: this structure appears to contain no boss at all.
+     */
+    public static final String MESSAGE_SCAN_NO_BOSS = "structurereset.message.learning.scan_no_boss";
+    /** Appended to {@link #MESSAGE_SCAN_NO_BOSS}: how to record a boss anyway. */
+    public static final String MESSAGE_SCAN_NO_BOSS_HINT =
+            "structurereset.message.learning.scan_no_boss_hint";
+    /**
+     * How many nearby non-boss living entities a structure scan must see before it
+     * answers with {@link #MESSAGE_SCAN_NO_BOSS} instead of
+     * {@link #MESSAGE_SCAN_NONE}.
+     *
+     * <p>A structure holding a crowd of ordinary mobs and no boss is a different
+     * situation from an empty one: the first very likely has a boss this mod does
+     * not recognise, so the answer names the remedy - sneak and right click the
+     * creature - instead of only saying that nothing was found. Five is a small
+     * fixed number on purpose: it is this one documented constant, not a
+     * configuration key, and one spawner room already reaches it.</p>
+     */
+    public static final int NO_BOSS_CROWD = 5;
 
     /** True when the shared boss gate accepts {@code entity}. */
     public static boolean isBossCandidate(LivingEntity entity) {
@@ -804,6 +882,12 @@ public final class LearnedAnchorService {
      * log, so an operator can see what the scan saw. Aiming at a specific mob
      * and sneaking still records exactly that mob, and the admin command still
      * overrides everything.</p>
+     *
+     * <p>A scan that finds no candidate at all distinguishes an empty structure
+     * from one that is full of ordinary mobs and no boss: the first answers
+     * {@link #MESSAGE_SCAN_NONE}, the second {@link #MESSAGE_SCAN_NO_BOSS} plus
+     * {@link #MESSAGE_SCAN_NO_BOSS_HINT} once it saw at least
+     * {@link #NO_BOSS_CROWD} nearby non-boss living entities.</p>
      *
      * @param player the player doing the scan, required
      * @return the result, never null
@@ -875,8 +959,15 @@ public final class LearnedAnchorService {
 
         AABB bounds = new AABB(minX, minY, minZ, maxX + 1.0D, maxY + 1.0D, maxZ + 1.0D);
         List<LivingEntity> live = new ArrayList<>();
+        int nonBossCrowd = 0;
         for (LivingEntity entity : level.getEntitiesOfClass(LivingEntity.class, bounds)) {
-            if (entity == player || !entity.isAlive() || !isBossCandidate(entity)) {
+            if (entity == player || !entity.isAlive()) {
+                continue;
+            }
+            if (!isBossCandidate(entity)) {
+                // Alive, not the scanning player and matching no boss criterion:
+                // exactly the crowd the "no boss" answer talks about.
+                nonBossCrowd++;
                 continue;
             }
             live.add(entity);
@@ -890,24 +981,43 @@ public final class LearnedAnchorService {
         }
 
         if (candidates.isEmpty()) {
-            LOGGER.info("[{}] structure scan at {} found no boss candidate inside {}",
-                    StructureResetConfig.MOD_ID, origin, structureIds);
+            LOGGER.info("[{}] structure scan at {} found no boss candidate inside {} "
+                            + "({} nearby non-boss living entity/entities)",
+                    StructureResetConfig.MOD_ID, origin, structureIds, nonBossCrowd);
+            if (nonBossCrowd >= NO_BOSS_CROWD) {
+                // A crowd of ordinary mobs and not one recognised boss: this
+                // structure appears to contain no boss, and the player is told how
+                // to add the one the mod cannot see.
+                Component message = Component.translatable(MESSAGE_SCAN_NO_BOSS)
+                        .append(Component.literal(" "))
+                        .append(Component.translatable(MESSAGE_SCAN_NO_BOSS_HINT));
+                return new TeachResult(false, MESSAGE_SCAN_NO_BOSS, message, "", 0, 0, 0);
+            }
             return failure(MESSAGE_SCAN_NONE, "no boss candidate inside the structure");
         }
         // A candidate that is a member of a configured boss tag is the strongest
-        // signal there is, so it wins over whatever happened to be seen first.
+        // signal there is, so it wins over whatever happened to be seen first. A
+        // candidate only the optional Boss Checklist list names is the next best
+        // hint, and the insertion order decides when neither applies.
         String chosen = null;
+        String listed = null;
         for (String candidate : candidates.keySet()) {
             ResourceLocation candidateId = ResourceLocation.tryParse(candidate);
             EntityType<?> candidateType = candidateId == null ? null
                     : ForgeRegistries.ENTITY_TYPES.getValue(candidateId);
-            if (candidateType != null && bossTagged(candidateType)) {
+            if (candidateType == null) {
+                continue;
+            }
+            if (bossTagged(candidateType)) {
                 chosen = candidate;
                 break;
             }
+            if (listed == null && BossChecklistBridge.isListedBoss(candidateType)) {
+                listed = candidate;
+            }
         }
         if (chosen == null) {
-            chosen = candidates.keySet().iterator().next();
+            chosen = listed != null ? listed : candidates.keySet().iterator().next();
         }
         BlockPos point = candidates.get(chosen);
         Recorded recorded = record(level, player, chosen, point);
@@ -927,10 +1037,34 @@ public final class LearnedAnchorService {
     /**
      * True when an entity type stored in a block entity may be the boss of a
      * structure: it must be a real mob - never an item, a projectile or a
-     * marker - and it must pass exactly the gate a taught entity passes.
+     * marker - and it must match a boss criterion. An explicitly designated mob
+     * does not have to, but an unnamed block entity value has to.
      */
     private static boolean anchorCandidateAllowed(ServerLevel level, EntityType<?> type) {
         return classifyType(level, type) == null;
+    }
+
+    /**
+     * True when {@code type} really creates a living mob in {@code level}.
+     *
+     * <p>This is the "non-living target" gate of the administrative
+     * {@link #teachEntity(ServerPlayer, String)} command, the only entry point
+     * that names a type instead of an instance: an item, a projectile or a
+     * marker has the {@code MISC} category, and a type whose instance is not a
+     * {@link LivingEntity} is refused as well. The probe instance is discarded
+     * again.</p>
+     */
+    private static boolean createsLivingEntity(ServerLevel level, EntityType<?> type) {
+        if (type == null || type.getCategory() == MobCategory.MISC) {
+            return false;
+        }
+        Entity created = type.create(level);
+        if (created == null) {
+            return false;
+        }
+        boolean living = created instanceof LivingEntity;
+        created.discard();
+        return living;
     }
 
     /**
@@ -941,10 +1075,10 @@ public final class LearnedAnchorService {
      * the administrative {@link #teachEntity(ServerPlayer, String)} command and
      * the "anchor block entity names this entity" candidate of the structure
      * scan. A temporary instance is created and discarded again because the
-     * classification reads the type's tags, its NBT and its maximum health, and
-     * because an item, a projectile or a marker is never a boss: those have the
-     * {@code MISC} category, which vanilla does not hand out over the boss
-     * gates of this mod.</p>
+     * classification reads the type's tags and its NBT, and because an item, a
+     * projectile or a marker is never a boss: those have the {@code MISC}
+     * category, which vanilla does not hand out over the boss gates of this
+     * mod.</p>
      */
     private static String classifyType(ServerLevel level, EntityType<?> type) {
         if (type == null || type.getCategory() == MobCategory.MISC) {

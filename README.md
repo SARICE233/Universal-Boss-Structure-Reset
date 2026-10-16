@@ -11,7 +11,7 @@
 | 加载器 | Forge（`loaderVersion="[47,)"`；开发环境 47.3.22） |
 | 支持版本 | Minecraft 1.20.1 / Java 17 |
 | modid | `structurereset` |
-| 前置依赖 | 无。KubeJS 与 L_Ender's Cataclysm 均为可选软依赖 |
+| 前置依赖 | 无必需前置。KubeJS、L_Ender's Cataclysm 与 Boss Checklist 均为可选软依赖 |
 | 许可 | MIT |
 | 联机 | 客户端与服务端都需安装；所有判定在服务端完成 |
 
@@ -29,10 +29,12 @@
 
 1. 把 `structurereset-<版本>.jar` 放进客户端与服务端的 `mods/`，启动一次游戏生成配置文件与内置定义；需要 Java 17。
 2. 用 4 钻石 + 4 远古残骸 + 1 下界之星合成 `structurereset:structure_reset_core`，或直接使用整合包提供的物品。
-3. 进入 Boss 结构后，先用核心左键点容器抓取战利品表，再潜行手持核心右键 Boss 完成录入。
+3. 进入 Boss 结构后，先用核心左键点容器抓取战利品表，再潜行手持核心右键**结构内的那只生物**完成录入（认不出它也会照记，并提示「未匹配任何 Boss 标签」）。
 4. 击败 Boss，回到原地右键两次（第一次瞄准、第二次锁定读条）：Boss 重生、战利品重填，可再次攻略。
 
 内置 14 条 L_Ender's Cataclysm 结构定义，装上该模组即可直接使用；其他结构按第 3 步录入，或写数据包定义。
+
+装有 Boss Checklist 时，本模组还会把它服务端数据包里的 Boss id 清单当作**最后一步**识别依据（软依赖、无编译依赖、缺文件不影响任何功能），详见 [docs/LEARNING.md](docs/LEARNING.md) 第 3.1 节。
 
 ## 配置
 
@@ -45,7 +47,7 @@
 | `defaultCooldownSeconds` | `60` | 定义未写 `cooldown_seconds` 时的冷却秒数 |
 | `resetRequiresDefeated` | `true` | 结构内仍有存活 Boss 时拒绝重置 |
 | `aimCastTicks` | `100` | 锁定后的读条时长（tick，100 = 5 秒） |
-| `learningMinMaxHealth` | `300` | 血量兜底阈值；被 Boss 标签 / 白名单 / NBT 键命中时不看血量 |
+| `learningBossTags` | `structurereset:known_bosses` 等 3 个 | Boss 实体标签：默认配置下的唯一自动识别依据 |
 
 其余键与完整说明见 [docs/LEARNING.md](docs/LEARNING.md)。
 
@@ -70,6 +72,7 @@
 * **不生成结构**：只重置已生成的结构；区块卸载或重新生成后的结果取决于服务端加载状态。
 * **锚点依赖**：默认定义以 `cataclysm:boss_respawner` 为锚点；没有可交互锚点的结构退化为「进入结构即触发」。
 * **KubeJS 为软依赖**：未安装时插件发现文件被忽略，模组功能不受影响。
+* **认不出的 Boss**：自动识别只看 Boss 实体标签，没有任何数值兜底。潜行右键方块扫描时，若附近有 ≥ 5 只普通生物却没有候选 Boss，会回「这个结构似乎不存在 Boss」；补救办法是走到那只生物旁**潜行右键它**——显式指定优先，即使它没有任何 Boss 标签也会被记为本结构的 Boss，并回一条「未匹配任何 Boss 标签」的警告。
 
 ## 文档
 

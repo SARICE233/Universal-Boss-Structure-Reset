@@ -299,8 +299,11 @@ public class StructureResetItem extends Item {
             return InteractionResultHolder.fail(stack);
         }
         if (!result.success()) {
+            // The result carries a message, not only a key: the "this structure
+            // appears to contain no boss" answer appends its hint to it, and a
+            // plain refusal is the translated key either way.
             player.displayClientMessage(
-                    Component.translatable(result.messageKey()).withStyle(ChatFormatting.RED), true);
+                    result.message().copy().withStyle(ChatFormatting.RED), true);
             level.playSound(null, player.blockPosition(), SoundEvents.DISPENSER_FAIL,
                     SoundSource.PLAYERS, 0.7F, 1.2F);
             return InteractionResultHolder.fail(stack);
@@ -368,7 +371,7 @@ public class StructureResetItem extends Item {
         LearnedAnchorService.TeachResult result = LearnedAnchorService.teach(serverPlayer, target);
         if (!result.success()) {
             serverPlayer.displayClientMessage(
-                    Component.translatable(result.messageKey()).withStyle(ChatFormatting.RED), true);
+                    result.message().copy().withStyle(ChatFormatting.RED), true);
             level.playSound(null, serverPlayer.blockPosition(), SoundEvents.DISPENSER_FAIL,
                     SoundSource.PLAYERS, 0.7F, 1.2F);
             return InteractionResult.FAIL;

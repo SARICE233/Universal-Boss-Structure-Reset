@@ -100,18 +100,6 @@ public final class StructureResetConfig {
     }
 
     /**
-     * Lowest maximum health a mob needs before it may be taught.
-     *
-     * <p>{@code 0} or a negative value disables the health criterion, which
-     * then accepts every mob that reached the other classification rules; the
-     * shipped default of 300 only matters for a mob that has neither a boss tag
-     * nor a place on the allow list.</p>
-     */
-    public static int learningMinMaxHealth() {
-        return integer(COMMON == null ? null : COMMON.learningMinMaxHealth, 300);
-    }
-
-    /**
      * When true the teaching player must stand inside a recognised structure.
      *
      * <p>The shipped default keeps the strict behaviour: a boss can only be
@@ -174,17 +162,27 @@ public final class StructureResetConfig {
     }
 
     /**
-     * Entity tags that mark a boss, checked before the health threshold.
+     * Entity tags that mark a boss.
      *
-     * <p>The default follows both ecosystem conventions - the Forge one
+     * <p>This is the recognition rule the whole layering ends in: an entity that
+     * is a member of one of these tags is a boss, and an entity that is a member
+     * of none of them is only recorded when the player points at it explicitly.
+     * The default follows both ecosystem conventions - the Forge one
      * ({@code forge:bosses}) and the common one ({@code c:bosses}) - and adds the
-     * addon's own {@code structurereset:known_bosses} fallback tag. A mod that
-     * tags its bosses therefore needs no configuration at all. In the authors'
-     * test pack those tags alone cover 29 bosses across 11 mods.</p>
+     * addon's own curated {@code structurereset:known_bosses} tag, which is
+     * looked up first because this project controls it. A mod that tags its
+     * bosses therefore needs no configuration at all.</p>
+     *
+     * <p>Wide "family" tags - tags that also contain ordinary mobs, such as a
+     * family tag of a boss mod or {@code minecraft:skeletons} - are deliberately
+     * <em>not</em> part of the shipped default: one non-boss member would make a
+     * structure record the wrong boss. A pack that wants the extra coverage adds
+     * them here and accepts that risk; the explicit right click records any boss
+     * a tag does not cover.</p>
      */
     public static List<String> learningBossTags() {
         return stringList(COMMON == null ? null : COMMON.learningBossTags,
-                List.of("forge:bosses", "c:bosses", "structurereset:known_bosses"));
+                List.of("structurereset:known_bosses", "forge:bosses", "c:bosses"));
     }
 
     /** The null-safe list reader shared by every list valued accessor. */
@@ -345,7 +343,6 @@ public final class StructureResetConfig {
         public final ForgeConfigSpec.BooleanValue debugLogging;
         public final ForgeConfigSpec.BooleanValue learningEnabled;
         public final ForgeConfigSpec.IntValue learningRadius;
-        public final ForgeConfigSpec.IntValue learningMinMaxHealth;
         public final ForgeConfigSpec.IntValue learningMaxAngleDegrees;
         public final ForgeConfigSpec.ConfigValue<List<? extends String>> learningBossNbtKeys;
         public final ForgeConfigSpec.BooleanValue learningRequireOp;
@@ -396,13 +393,6 @@ public final class StructureResetConfig {
                     .comment("How far, in blocks, around a learned anchor a structure is",
                             "searched for when the anchor is taught or replayed.")
                     .defineInRange("learningRadius", 64, 1, 512);
-            this.learningMinMaxHealth = builder
-                    .comment("Last resort of the boss classification: a mob may only be taught",
-                            "when its maximum health is at least this value. It is only",
-                            "consulted when no script filter, allow list entry, boss entity",
-                            "tag or boss NBT key decided the target first; 0 disables it.",
-                            "Prefer tagging your bosses with forge:bosses over tuning this.")
-                    .defineInRange("learningMinMaxHealth", 300, 0, 100000);
             this.learningMaxAngleDegrees = builder
                     .comment("Largest angle, in degrees, between the player's look direction",
                             "and the direction to the target at which teaching the target by",
@@ -464,8 +454,8 @@ public final class StructureResetConfig {
                             element -> element instanceof String);
             this.learningEntityAllowlist = builder
                     .comment("Entity ids that are accepted as a boss immediately, before the",
-                            "excluded namespaces, the deny list, the boss tags and the health",
-                            "threshold. Example entry: 'cataclysm:the_harbinger'.")
+                            "excluded namespaces, the deny list, the boss tags and the",
+                            "optional boss NBT keys. Example entry: 'cataclysm:the_harbinger'.")
                     .defineList("learningEntityAllowlist", java.util.List.of(),
                             element -> element instanceof String);
             this.learningEntityDenylist = builder
@@ -473,13 +463,18 @@ public final class StructureResetConfig {
                     .defineList("learningEntityDenylist", java.util.List.of(),
                             element -> element instanceof String);
             this.learningBossTags = builder
-                    .comment("Entity tags that mark a boss, checked before the health",
-                            "threshold; entries may be written with or without a leading",
-                            "'#'. The default follows both conventions (forge:bosses and",
-                            "c:bosses) plus the addon's own fallback tag, so a mod that tags",
-                            "its bosses needs no configuration at all.")
+                    .comment("Entity tags that mark a boss - the recognition rule every other",
+                            "criterion feeds into; entries may be written with or without a",
+                            "leading '#'. The default follows both conventions (forge:bosses",
+                            "and c:bosses) plus this addon's own curated",
+                            "structurereset:known_bosses tag, which is looked up first, so a",
+                            "mod that tags its bosses needs no configuration at all. Wide",
+                            "family tags (for example minecraft:skeletons) are left out on",
+                            "purpose: one non-boss member would make a structure record the",
+                            "wrong boss. An untagged boss is recorded by right clicking it",
+                            "with the core.")
                     .defineList("learningBossTags",
-                            java.util.List.of("forge:bosses", "c:bosses", "structurereset:known_bosses"),
+                            java.util.List.of("structurereset:known_bosses", "forge:bosses", "c:bosses"),
                             element -> element instanceof String);
             builder.pop();
         }

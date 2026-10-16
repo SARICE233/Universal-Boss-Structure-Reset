@@ -12,10 +12,15 @@ import net.minecraftforge.registries.ForgeRegistries;
  * The script supplied boss filter of the learning feature.
  *
  * <p>When a filter is registered it is the <em>only</em> boss criterion: it is
- * consulted before the built in "maximum health or configured NBT key" test,
- * and its verdict alone decides whether a target may be taught. With no filter
- * registered the built in test applies, so a plain data pack or vanilla setup
- * behaves exactly as before.</p>
+ * consulted before the built in boss entity tag and boss NBT key criteria, and
+ * its verdict alone decides whether a target is <em>recognised</em>. With no
+ * filter registered the built in criteria apply, so a plain data pack or
+ * vanilla setup behaves exactly as before.</p>
+ *
+ * <p>A target that no criterion recognises is never a boss automatically. An
+ * explicit designation still wins: a player who sneaks and right clicks the
+ * core on such a mob records it, with a warning instead of the ordinary
+ * reply.</p>
  *
  * <p>The filter receives one {@link JsonObject} describing the candidate (see
  * {@link #describe(LivingEntity)}): at least {@code id}, {@code max_health},

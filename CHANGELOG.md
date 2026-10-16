@@ -2,6 +2,36 @@
 
 本项目遵循「发布日期 + 语义化版本」的简单约定。alpha 之间可能包含破坏性改动。
 
+## 0.1.0-alpha.3 — Boss 识别重做
+
+Boss 识别重做：自动识别只认实体标签，认不出的 Boss 由玩家显式指定。
+
+### 变更
+
+* **移除血量兜底阈值**：脚本过滤器、白名单、实体标签与 NBT 键全部没有命中时，不再按最大生命值猜测 Boss；
+  这类目标在自动路径上一律不算 Boss，配置表里原先的阈值项随之删除。
+* **扫描会说「这个结构似乎不存在 Boss」**：潜行右键方块扫描结构时，若范围内有 ≥ 5 只普通生物却没有任何候选 Boss，
+  回执为「这个结构似乎不存在 Boss」＋「如果你仍想添加一个，请走到那只生物旁并潜行右键它」
+  （英文默认文案 This structure appears to contain no boss / if you still want to add one, walk up to that creature
+  and sneak + right-click it）；这两句分别是 `structurereset.message.learning.scan_no_boss` 与
+  `structurereset.message.learning.scan_no_boss_hint`，触发门槛是 `NO_BOSS_CROWD = 5`；
+  结构里确实没有生物时仍回原来的「本结构内没有可记录的 Boss 候选」。
+* **显式指定即录入**：潜行右键生物，或 OP 执行 `/structurereset records teach-here <entity>`，都是显式指定；
+  目标即使不匹配任何 Boss 标签也会被记为本结构的 Boss，回执换成警告
+  「未匹配任何 Boss 标签，仍已将其记录为本结构的 Boss」（`structurereset.message.learning.unrecognised`；
+  英文 Warning: … matched no boss tag …）。
+* **可选的 Boss Checklist 集成**：装上 `boss_checklist` 时，本模组把它服务端数据包里的 Boss id 清单
+  （`data/boss_checklist/server_bosses_ids.json`）当作识别的**最后一步**加分项——在 `mods.toml` 里声明为
+  `mandatory=false` 的软依赖（`versionRange="[0,)"`）、不写进 `build.gradle`、不引用对方的类、无需任何配置；
+  未安装、文件缺失或清单为空时答案完全一样，识别照常只按实体标签与 NBT 键判定，对方清单里点名的实体照样被接受。
+
+### 文档
+
+* README 配置表删除血量阈值一行，改为列出 `learningBossTags`；快速上手仍为「潜行 + 右键结构内那只生物」。
+* `docs/LEARNING.md` 的识别梯子、扫描回执与显式指定路径逐条对齐代码，并列出全部消息键。
+* `docs/LEARNING.md` 新增 3.1 节说明可选的 Boss Checklist 集成（读取路径、刷新时机、缺失 / 空清单的退化行为）；
+  README 的依赖行把 Boss Checklist 标为可选软依赖。
+
 ## 0.1.0-alpha.2 — 修复与文档整理
 
 第二次公开测试。无新增玩法，重点是修正 0.1.0-alpha 的缺陷并收敛文档与工具链。

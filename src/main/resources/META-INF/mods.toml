@@ -28,3 +28,14 @@ mandatory=true
 versionRange="[1.20.1,1.21)"
 ordering="NONE"
 side="BOTH"
+
+# Optional soft dependency, deliberately not a compile dependency: Boss Checklist
+# ships its boss id list as a plain data pack resource, and the bridge reads it
+# only when the mod is installed. Absence is normal and never an error, so the
+# entry is mandatory=false and its range accepts whatever version is installed.
+[[dependencies.structurereset]]
+modId="boss_checklist"
+mandatory=false
+versionRange="[0,)"
+ordering="NONE"
+side="BOTH"
